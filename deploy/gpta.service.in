@@ -1,0 +1,19 @@
+[Unit]
+Description=GPTA modular receipt server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@RUN_USER@
+WorkingDirectory=@ROOT@
+Environment=PYTHONUNBUFFERED=1
+Environment=GPTA_DATA_DIR=@DATA_DIR@
+ExecStart=@EXEC@
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+@SUPPLEMENTARY_GROUPS@
+
+[Install]
+WantedBy=multi-user.target

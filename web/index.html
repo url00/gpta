@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GPTA - Receipt Console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>GPTA</h1>
+      <span id="server-status" class="status">connecting...</span>
+    </div>
+    <div class="printer-controls">
+      <label class="inline"><input type="checkbox" id="printer-enabled"> Printer enabled</label>
+      <label class="inline"><input type="checkbox" id="printer-auto"> Auto print</label>
+      <label class="inline">Width
+        <select id="printer-width">
+          <option value="32">32</option>
+          <option value="48">48</option>
+        </select>
+      </label>
+      <label class="inline grow">Device
+        <input id="printer-device" type="text" spellcheck="false" autocomplete="off">
+      </label>
+      <button id="printer-save" type="button">Save printer</button>
+      <button id="printer-test" type="button" class="secondary">Test print</button>
+    </div>
+    <div id="printer-state" class="muted printer-state"></div>
+  </header>
+
+  <div id="banner" class="banner hidden" role="alert"></div>
+
+  <main>
+    <section id="modules" class="modules" aria-label="Data modules"></section>
+    <aside class="simulator" aria-label="Printer simulator">
+      <div class="sim-head">
+        <h2>Printer simulator</h2>
+        <select id="sim-select" aria-label="Simulator source"></select>
+      </div>
+      <div class="paper"><pre id="receipt"></pre></div>
+      <div id="sim-meta" class="muted"></div>
+    </aside>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

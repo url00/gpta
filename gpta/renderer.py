@@ -1,0 +1,144 @@
+"""Receipt layout shared by the simulator and the physical printer."""
+
+from __future__ import annotations
+
+import textwrap
+import unicodedata
+from datetime import datetime, timezone
+from typing import Iterable, Sequence
+
+from .module_api import Block
+
+
+def ascii_safe(text: object) -> str:
+    """Convert arbitrary text to printable ASCII while keeping newlines."""
+    if text is None:
+        return ""
+    value = str(text)
+    value = (
+        value.replace("—", "-")
+        .replace("–", "-")
+        .replace("‘", "'")
+        .replace("’", "'")
+        .replace("“", '"')
+        .replace("”", '"')
+        .replace("…", "...")
+    )
+    value = "".join(
+        ch for ch in unicodedata.normalize("NFKD", value) if not unicodedata.combining(ch)
+    )
+    value = value.encode("ascii", "replace").decode("ascii")
+    out = []
+    for ch in value:
+        if ch == "\n" or 32 <= ord(ch) <= 126:
+            out.append(ch)
+        elif ch == "\t":
+            out.append(" ")
+        else:
+            out.append(" ")
+    return "".join(out)
+
+
+def wrap_text(text: object, width: int) -> list[str]:
+    width = max(1, int(width))
+    safe = ascii_safe(text)
+    lines: list[str] = []
+    for paragraph in safe.split("\n"):
+        if not paragraph.strip():
+            lines.append("")
+            continue
+        wrapped = textwrap.wrap(
+            paragraph,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+            replace_whitespace=True,
+            drop_whitespace=True,
+        )
+        lines.extend(wrapped or [""])
+    return lines
+
+
+def _utc(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _truncate(lines: list[str], max_chars: int | None) -> list[str]:
+    if max_chars is None:
+        return lines
+    max_chars = max(0, int(max_chars))
+    out: list[str] = []
+    used = 0
+    for line in lines:
+        if used + len(line) <= max_chars:
+            out.append(line)
+            used += len(line)
+            continue
+        remaining = max_chars - used
+        if remaining > 0:
+            out.append(line[:remaining])
+        out.append("[truncated]")
+        return out
+    return out
+
+
+def render_receipt(
+    module_name: str,
+    blocks: Sequence[Block],
+    width: int,
+    max_chars: int | None = None,
+    now: datetime | None = None,
+) -> list[str]:
+    width = max(1, int(width))
+    lines: list[str] = []
+    header = ascii_safe(module_name).upper()
+    lines.append(header[:width].center(width))
+    lines.append("-" * width)
+    lines.append("")
+    for block in blocks:
+        if block.title:
+            lines.extend(wrap_text(block.title.upper(), width))
+            lines.append("")
+        body = list(block.lines)
+        if not body:
+            body = [""]
+        for item in body:
+            lines.extend(wrap_text(item, width))
+        lines.append("")
+    stamp = _utc(now).strftime("%Y-%m-%d %H:%M UTC")
+    lines.append(stamp.center(width))
+    lines.append("-" * width)
+    return _truncate(lines, max_chars)
+
+
+def render_total(
+    sections: Iterable[tuple[str, Sequence[str]]], width: int
+) -> list[str]:
+    width = max(1, int(width))
+    parts: list[str] = []
+    for index, (_name, lines) in enumerate(sections):
+        if index:
+            parts.extend(["", "=" * width, ""])
+        parts.extend(str(line) for line in lines)
+    if not parts:
+        return ["No output from enabled modules."]
+    return parts
+
+
+def to_escpos(
+    lines: Sequence[str],
+    encoding: str = "cp437",
+    feed_lines: int = 3,
+    cut: bool = True,
+) -> bytes:
+    safe = [ascii_safe(line) for line in lines]
+    body = "\n".join(safe)
+    data = b"\x1b@" + body.encode(encoding, errors="replace")
+    data += b"\n" * max(0, int(feed_lines))
+    if cut:
+        data += b"\x1dV\x00"
+    return data
