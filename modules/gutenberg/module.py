@@ -77,21 +77,17 @@ def _book_candidates(ctx: ModuleContext) -> list[dict]:
 def _cached_text(ctx: ModuleContext, book: dict) -> str:
     book_id = int(book["id"])
     url = TEXT_URL.format(book_id)
-    cache = ctx.data_dir / "cache" / "gutenberg" / f"{book_id}.txt"
+    key = f"gutenberg/{book_id}.txt"
     use_cache = bool(ctx.options.get("cache", True))
-    if use_cache and cache.is_file():
-        try:
+    if use_cache:
+        cached = ctx.cache.read_text(key)
+        if cached is not None:
             ctx.emit(f"using cached text for book {book_id}")
-            return cache.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            ctx.emit(f"cache read failed: {exc}", "warning")
+            return cached
     text = ctx.http.get_text(url, max_bytes=1_000_000)
     if use_cache:
         try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            tmp = cache.with_suffix(".tmp")
-            tmp.write_text(text, encoding="utf-8")
-            tmp.replace(cache)
+            ctx.cache.write_text(key, text)
         except OSError as exc:
             ctx.emit(f"cache write failed: {exc}", "warning")
     return text

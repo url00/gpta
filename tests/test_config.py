@@ -38,6 +38,9 @@ class ConfigTests(unittest.TestCase):
         snap = self.store.snapshot()
         self.assertFalse(snap["modules"]["echo"]["enabled"])
         self.assertEqual(snap["printer"]["width"], 32)
+        self.assertEqual(snap["server"]["run_timeout_seconds"], 120)
+        self.assertEqual(snap["printer"]["min_print_spacing_seconds"], 30)
+        self.assertEqual(snap["printer"]["failure_threshold"], 3)
         self.assertEqual(list(Path(self.tmp.name).glob("*.tmp")), [])
 
     def test_update_and_roundtrip(self):
@@ -59,6 +62,23 @@ class ConfigTests(unittest.TestCase):
             self.store.update_module("echo", {"unknown": True})
         with self.assertRaises(ConfigError):
             self.store.update_printer({"width": 40})
+
+    def test_printer_device_must_stay_under_dev(self):
+        for device in ("/etc/passwd", "/dev/../etc/passwd", "/dev", "dev/lp0"):
+            with self.subTest(device=device):
+                with self.assertRaises(ConfigError):
+                    self.store.update_printer({"device": device})
+        self.store.update_printer({"device": "/dev/null"})
+
+    def test_print_guard_config_is_validated(self):
+        with self.assertRaises(ConfigError):
+            self.store.update_printer({"min_print_spacing_seconds": -1})
+        with self.assertRaises(ConfigError):
+            self.store.update_printer({"max_prints_per_hour": 0})
+        with self.assertRaises(ConfigError):
+            self.store.update_printer({"failure_threshold": 0})
+        with self.assertRaises(ConfigError):
+            self.store.update_printer({"write_timeout_seconds": 0})
 
     def test_unknown_module_config_ignored(self):
         data = json.loads(self.path.read_text())

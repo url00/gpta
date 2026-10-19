@@ -44,14 +44,14 @@ class ApiTests(unittest.TestCase):
         self.service.stop()
         self.tmp.cleanup()
 
-    def request(self, method, path, body=None, raw=None):
+    def request(self, method, path, body=None, raw=None, headers=None):
         data = raw
-        headers = {}
+        hdrs = dict(headers or {})
         if body is not None:
             data = json.dumps(body).encode()
-            headers["Content-Type"] = "application/json"
+            hdrs["Content-Type"] = "application/json"
         request = urllib.request.Request(
-            self.base + path, data=data, method=method, headers=headers
+            self.base + path, data=data, method=method, headers=hdrs
         )
         try:
             with urllib.request.urlopen(request, timeout=5) as response:
@@ -70,6 +70,8 @@ class ApiTests(unittest.TestCase):
             ["affirmations", "google_tasks", "gutenberg", "hackernews"],
         )
         self.assertFalse(state["printer"]["enabled"])
+        self.assertNotIn("logs", state)
+        self.assertEqual(state["registry_errors"], [])
         for path in ("/", "/static/app.js", "/static/style.css"):
             status, _, _ = self.request("GET", path)
             self.assertEqual(status, 200, path)
@@ -117,6 +119,44 @@ class ApiTests(unittest.TestCase):
         response.read()
         conn.close()
         self.assertEqual(response.status, 404)
+
+    def test_logs_endpoint_is_incremental(self):
+        status, body, _ = self.request("GET", "/api/logs?since=0")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertIn("entries", payload)
+        self.assertIn("next", payload)
+        status, body, _ = self.request("GET", f"/api/logs?since={payload['next']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["entries"], [])
+
+    def test_host_header_rejected(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.putrequest("GET", "/api/state", skip_host=True)
+        conn.putheader("Host", "evil.example")
+        conn.endheaders()
+        response = conn.getresponse()
+        response.read()
+        conn.close()
+        self.assertEqual(response.status, 403)
+
+    def test_token_authentication(self):
+        self.server.auth_token = "s3cret"
+        status, _, _ = self.request("GET", "/api/state")
+        self.assertEqual(status, 401)
+        status, _, _ = self.request(
+            "GET",
+            "/api/state",
+            headers={"Authorization": "Bearer s3cret"},
+        )
+        self.assertEqual(status, 200)
+        status, _, _ = self.request(
+            "PATCH",
+            "/api/modules/affirmations",
+            {"enabled": True},
+            headers={"X-GPTA-Token": "s3cret"},
+        )
+        self.assertEqual(status, 200)
 
     def test_printer_config_roundtrip(self):
         status, body, _ = self.request(

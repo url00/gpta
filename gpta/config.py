@@ -12,7 +12,12 @@ from typing import Any
 
 from .module_api import Module
 
-DEFAULT_SERVER = {"host": "127.0.0.1", "port": 8787}
+DEFAULT_SERVER = {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "run_timeout_seconds": 120,
+    "auth_token": "",
+}
 DEFAULT_PRINTER = {
     "enabled": False,
     "auto_print": True,
@@ -21,6 +26,10 @@ DEFAULT_PRINTER = {
     "encoding": "cp437",
     "feed_lines": 3,
     "cut": True,
+    "write_timeout_seconds": 10,
+    "min_print_spacing_seconds": 30,
+    "max_prints_per_hour": 60,
+    "failure_threshold": 3,
 }
 SUPPORTED_ENCODINGS = {"cp437", "ascii", "latin-1"}
 
@@ -158,6 +167,16 @@ def _normalise_server(raw: Any) -> dict[str, Any]:
         raise ConfigError("server.host must be a non-empty string")
     if type(result["port"]) is not int or not 1 <= result["port"] <= 65535:
         raise ConfigError("server.port must be an integer between 1 and 65535")
+    if (
+        type(result["run_timeout_seconds"]) is not int
+        or not 5 <= result["run_timeout_seconds"] <= 3600
+    ):
+        raise ConfigError("server.run_timeout_seconds must be between 5 and 3600")
+    token = result["auth_token"]
+    if not isinstance(token, str):
+        raise ConfigError("server.auth_token must be a string")
+    if len(token) > 512:
+        raise ConfigError("server.auth_token is longer than 512 characters")
     return result
 
 
@@ -174,8 +193,11 @@ def _normalise_printer(raw: Any) -> dict[str, Any]:
     for key in ("enabled", "auto_print", "cut"):
         if type(result[key]) is not bool:
             raise ConfigError(f"printer.{key} must be true or false")
-    if not isinstance(result["device"], str) or not result["device"].startswith("/"):
-        raise ConfigError("printer.device must be an absolute path")
+    device = result["device"]
+    if not isinstance(device, str) or not device.startswith("/dev/"):
+        raise ConfigError("printer.device must be a path under /dev/")
+    if os.path.normpath(device) != device:
+        raise ConfigError("printer.device must be a normalised path under /dev/")
     if type(result["width"]) is not int or result["width"] not in (32, 48):
         raise ConfigError("printer.width must be 32 or 48")
     if result["encoding"] not in SUPPORTED_ENCODINGS:
@@ -184,6 +206,27 @@ def _normalise_printer(raw: Any) -> dict[str, Any]:
         )
     if type(result["feed_lines"]) is not int or not 0 <= result["feed_lines"] <= 10:
         raise ConfigError("printer.feed_lines must be between 0 and 10")
+    if type(result["write_timeout_seconds"]) is not int or not 1 <= result[
+        "write_timeout_seconds"
+    ] <= 120:
+        raise ConfigError("printer.write_timeout_seconds must be between 1 and 120")
+    if (
+        type(result["min_print_spacing_seconds"]) is not int
+        or not 0 <= result["min_print_spacing_seconds"] <= 3600
+    ):
+        raise ConfigError(
+            "printer.min_print_spacing_seconds must be between 0 and 3600"
+        )
+    if (
+        type(result["max_prints_per_hour"]) is not int
+        or not 1 <= result["max_prints_per_hour"] <= 10000
+    ):
+        raise ConfigError("printer.max_prints_per_hour must be between 1 and 10000")
+    if (
+        type(result["failure_threshold"]) is not int
+        or not 1 <= result["failure_threshold"] <= 100
+    ):
+        raise ConfigError("printer.failure_threshold must be between 1 and 100")
     return result
 
 

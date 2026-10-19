@@ -12,7 +12,14 @@ let state = null;
 let selected = "total";
 let refreshing = false;
 let bannerTimer = null;
+let logEntries = [];
+let nextLogSeq = null;
 const cards = new Map();
+
+function storedToken() {
+  try { return sessionStorage.getItem("gpta_token") || ""; }
+  catch { return ""; }
+}
 
 function make(tag, className, text) {
   const node = document.createElement(tag);
@@ -21,13 +28,22 @@ function make(tag, className, text) {
   return node;
 }
 
-async function api(path, options = {}) {
+async function api(path, options = {}, retried = false) {
   const opts = { ...options, headers: { ...(options.headers || {}) } };
   if (opts.body && typeof opts.body !== "string") {
     opts.body = JSON.stringify(opts.body);
     opts.headers["Content-Type"] = "application/json";
   }
+  const token = storedToken();
+  if (token) opts.headers.Authorization = `Bearer ${token}`;
   const response = await fetch(path, opts);
+  if (response.status === 401 && !retried) {
+    const entered = window.prompt("This server requires an access token:");
+    if (entered) {
+      try { sessionStorage.setItem("gpta_token", entered.trim()); } catch { /* ignore */ }
+      return api(path, options, true);
+    }
+  }
   const text = await response.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text }; }
@@ -242,6 +258,9 @@ function updateCard(entry, module) {
   if (runtime.next_due_seconds !== null && runtime.next_due_seconds !== undefined) {
     parts.push(`next in ${runtime.next_due_seconds}s`);
   }
+  if (runtime.consecutive_failures) {
+    parts.push(`${runtime.consecutive_failures} failure(s), backoff ${runtime.effective_interval_seconds}s`);
+  }
   entry.meta.textContent = parts.join(" · ");
   setValueIfIdle(entry.interval, module.interval_seconds);
   for (const item of entry.fieldEntries) {
@@ -252,7 +271,7 @@ function updateCard(entry, module) {
   entry.output.textContent = module.output.text || "No output yet.";
   entry.download.href = `/api/output/${encodeURIComponent(module.id)}`;
   entry.logs.replaceChildren();
-  const moduleLogs = (state.logs || []).filter((item) => item.module === module.id).slice(-40);
+  const moduleLogs = logEntries.filter((item) => item.module === module.id).slice(-40);
   for (const item of moduleLogs) {
     const li = make("li", `lvl-${item.level}`, `${item.ts} ${item.message}`);
     entry.logs.append(li);
@@ -268,6 +287,7 @@ function updatePrinter() {
   setValueIfIdle(document.getElementById("printer-device"), printer.device);
   const bits = [printer.enabled ? "physical printing enabled" : "simulator only"];
   if (printer.last_print_at) bits.push(`last print ${printer.last_print_at}`);
+  if (printer.disabled_reason) bits.push(printer.disabled_reason);
   if (printer.last_error) bits.push(`error: ${printer.last_error}`);
   printerState.textContent = bits.join(" · ");
 }
@@ -303,8 +323,21 @@ function updateSimulator() {
 
 function updateAll() {
   const server = state.server;
-  serverStatus.textContent = `v${server.version} · up ${server.uptime_seconds}s · ${server.scheduler_running ? "scheduler on" : "scheduler off"}`;
-  serverStatus.classList.remove("error");
+  const bits = [
+    `v${server.version}`,
+    `up ${server.uptime_seconds}s`,
+    server.scheduler_running ? "scheduler on" : "scheduler off",
+  ];
+  if (server.scheduler_running && server.last_tick_age_seconds !== null) {
+    bits.push(`tick ${server.last_tick_age_seconds}s ago`);
+  }
+  if (server.scheduler_stale) bits.push("SCHEDULER STALLED");
+  if (server.auth_required) bits.push("auth on");
+  const errors = state.registry_errors || [];
+  if (errors.length) bits.push(`${errors.length} quarantined module(s)`);
+  serverStatus.textContent = bits.join(" · ");
+  serverStatus.title = errors.map((item) => `${item.module}: ${item.error}`).join("\n");
+  serverStatus.classList.toggle("error", Boolean(server.scheduler_stale));
 
   updatePrinter();
 
@@ -323,11 +356,23 @@ function updateAll() {
   updateSimulator();
 }
 
+async function refreshLogs() {
+  const since = nextLogSeq === null ? 0 : nextLogSeq;
+  const data = await api(`/api/logs?since=${since}`);
+  const entries = data.entries || [];
+  if (entries.length) {
+    logEntries.push(...entries);
+    if (logEntries.length > 2000) logEntries = logEntries.slice(-2000);
+  }
+  nextLogSeq = data.next === undefined ? since : data.next;
+}
+
 async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
     state = await api("/api/state");
+    await refreshLogs();
     updateAll();
   } catch (error) {
     serverStatus.textContent = "server unreachable";

@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from gpta.module_api import FetchError, ModuleContext
+from gpta.module_api import Cache, FetchError, ModuleContext
 from gpta.registry import discover
 from gpta import DEFAULT_MODULES_DIR
 
@@ -44,6 +44,7 @@ def make_ctx(module_id, http, tmp, limits=None, options=None):
         data_dir=Path(tmp),
         now=NOW,
         http=http,
+        cache=Cache(Path(tmp) / "cache"),
         log=lambda *args, **kwargs: None,
     )
 
