@@ -130,33 +130,16 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["entries"], [])
 
-    def test_host_header_rejected(self):
+    def test_external_host_header_accepted(self):
+        # The server sits behind a tunnel that forwards the public hostname.
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.putrequest("GET", "/api/state", skip_host=True)
-        conn.putheader("Host", "evil.example")
+        conn.putheader("Host", "gpta.theplacewiththestuff.online")
         conn.endheaders()
         response = conn.getresponse()
-        response.read()
+        body = response.read()
         conn.close()
-        self.assertEqual(response.status, 403)
-
-    def test_token_authentication(self):
-        self.server.auth_token = "s3cret"
-        status, _, _ = self.request("GET", "/api/state")
-        self.assertEqual(status, 401)
-        status, _, _ = self.request(
-            "GET",
-            "/api/state",
-            headers={"Authorization": "Bearer s3cret"},
-        )
-        self.assertEqual(status, 200)
-        status, _, _ = self.request(
-            "PATCH",
-            "/api/modules/affirmations",
-            {"enabled": True},
-            headers={"X-GPTA-Token": "s3cret"},
-        )
-        self.assertEqual(status, 200)
+        self.assertEqual(response.status, 200, body)
 
     def test_printer_config_roundtrip(self):
         status, body, _ = self.request(

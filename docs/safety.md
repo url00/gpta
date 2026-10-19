@@ -25,8 +25,6 @@ records what happens when things go wrong.
 | Oversized JSON response | `read_limit` exceeded | `FetchError`, no unbounded read | — |
 | Oversized request to API | `MAX_BODY` | `400` | — |
 | Log storm | Rotating file (1 MB × 3), 1000-entry ring, 100 emits/run | Bounded disk/memory | Automatic |
-| Bad `Host` header | Allowlist of configured host + localhost + IP literals | `403` (blocks DNS rebinding) | Use an allowed host |
-| Missing/incorrect token | `GPTA_AUTH_TOKEN` or `server.auth_token` configured | `/api/*` returns `401` | Supply `Authorization: Bearer` or `X-GPTA-Token` |
 
 ## Known limits of isolation
 
@@ -44,19 +42,21 @@ records what happens when things go wrong.
 
 ## Security posture
 
+- **No application authentication:** GPTA does not authenticate users. It MUST
+  be hosted behind another authentication layer (for example a Cloudflare
+  Tunnel with Access/OAuth, an authenticating reverse proxy, or a VPN) whenever
+  it is reachable beyond loopback.
 - **CSRF:** state-changing API requests require `Content-Type:
   application/json`, which blocks cross-origin "simple" form posts. Keep this
-  invariant when adding endpoints. Token auth uses a header, which is not
-  attachable cross-origin.
-- **Host validation:** the `Host` header must match the configured host,
-  `localhost`, or an IP literal. This blocks DNS-rebinding access to the local
-  console.
+  invariant when adding endpoints.
+- **No `Host` allowlist:** any `Host` header is accepted so tunnels and reverse
+  proxies can forward public hostnames. Access control therefore depends on
+  the external authentication layer; there is no DNS-rebinding guard.
 - **Printer device:** configuration is restricted to normalised paths under
   `/dev/`; the transport resolves symlinks, requires the target to stay under
   `/dev/`, and refuses non-character devices.
 - **Bind address:** the default is `127.0.0.1`. Binding elsewhere logs a warning
-  unless `GPTA_AUTH_TOKEN` or `server.auth_token` is set. Prefer the environment
-  variable so the secret is not stored in `config.json`.
+  about the missing authentication boundary but still starts.
 - **Lock hierarchy:** service lock → config lock. Never take the service lock
   while holding the config lock.
 

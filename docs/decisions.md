@@ -41,11 +41,12 @@ Revisit if three or more modules duplicate the same logic.
 manual start script redirects early stderr to `data/server.out` so it cannot
 interleave with the rotating handler.
 
-## 4.4 Token authentication
+## 4.4 Authentication boundary
 
-**Decision:** authentication is opt-in. A token set through
-`GPTA_AUTH_TOKEN` (preferred) or `server.auth_token` protects `/api/*` with
-`Authorization: Bearer` or `X-GPTA-Token`; static assets remain public so the
-console can load and prompt for the token. Binding beyond loopback without a
-token logs a warning but still starts, preserving the existing appliance
-workflow.
+**Decision:** GPTA does not implement authentication. Deployments behind an
+authenticating layer (Cloudflare Tunnel with Access/OAuth, an authenticating
+reverse proxy, or a private network) do not need a second credential, and an
+in-process token check cannot protect a directly exposed port on its own.
+Binding beyond loopback logs a warning but still starts. The JSON content-type
+CSRF rule remains as a browser-side defense, not user authentication; `Host`
+is not restricted so tunneled public hostnames work.

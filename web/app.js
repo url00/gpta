@@ -16,11 +16,6 @@ let logEntries = [];
 let nextLogSeq = null;
 const cards = new Map();
 
-function storedToken() {
-  try { return sessionStorage.getItem("gpta_token") || ""; }
-  catch { return ""; }
-}
-
 function make(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -28,22 +23,13 @@ function make(tag, className, text) {
   return node;
 }
 
-async function api(path, options = {}, retried = false) {
+async function api(path, options = {}) {
   const opts = { ...options, headers: { ...(options.headers || {}) } };
   if (opts.body && typeof opts.body !== "string") {
     opts.body = JSON.stringify(opts.body);
     opts.headers["Content-Type"] = "application/json";
   }
-  const token = storedToken();
-  if (token) opts.headers.Authorization = `Bearer ${token}`;
   const response = await fetch(path, opts);
-  if (response.status === 401 && !retried) {
-    const entered = window.prompt("This server requires an access token:");
-    if (entered) {
-      try { sessionStorage.setItem("gpta_token", entered.trim()); } catch { /* ignore */ }
-      return api(path, options, true);
-    }
-  }
   const text = await response.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text }; }
@@ -332,7 +318,6 @@ function updateAll() {
     bits.push(`tick ${server.last_tick_age_seconds}s ago`);
   }
   if (server.scheduler_stale) bits.push("SCHEDULER STALLED");
-  if (server.auth_required) bits.push("auth on");
   const errors = state.registry_errors || [];
   if (errors.length) bits.push(`${errors.length} quarantined module(s)`);
   serverStatus.textContent = bits.join(" · ");

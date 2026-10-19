@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
-import ipaddress
 import json
 import logging
 import mimetypes
@@ -36,37 +34,10 @@ class GptaHTTPServer(ThreadingHTTPServer):
         address,
         service: Service,
         web_root: Path,
-        auth_token: str = "",
     ):
         self.service = service
         self.web_root = Path(web_root).resolve()
-        self.auth_token = auth_token or ""
-        self.allowed_hosts, self.allow_ip_literals = self._host_allowlist(
-            address, service
-        )
         super().__init__(address, Handler)
-
-    @staticmethod
-    def _host_allowlist(
-        address, service: Service
-    ) -> tuple[set[str], bool]:
-        bind_host = (address[0] or "").strip().lower()
-        wildcard = bind_host in ("", "0.0.0.0", "::")
-        names = {"localhost", "ip6-localhost"}
-        if not wildcard:
-            names.add(bind_host)
-        configured = (service.bound_host or "").strip().lower()
-        if not configured:
-            try:
-                configured = service.config.snapshot()["server"]["host"].strip().lower()
-            except Exception:  # pragma: no cover - config always loaded
-                configured = ""
-        if configured and configured not in ("0.0.0.0", "::"):
-            names.add(configured)
-        names.discard("")
-        # IP literals cannot be used for DNS rebinding, so they are safe to
-        # accept when the listener is bound to a wildcard address.
-        return names, wildcard
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -155,51 +126,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         raise NotFound("not found")
 
-    # -- security ------------------------------------------------------
-    def _host_ok(self) -> bool:
-        header = self.headers.get("Host")
-        if not header:
-            return False
-        try:
-            host = urllib.parse.urlsplit("//" + header).hostname
-        except ValueError:
-            return False
-        if not host:
-            return False
-        host = host.lower().rstrip(".")
-        if host in self.server.allowed_hosts:
-            return True
-        if self.server.allow_ip_literals:
-            try:
-                ipaddress.ip_address(host)
-            except ValueError:
-                return False
-            return True
-        return False
-
-    def _authorized(self) -> bool:
-        token = self.server.auth_token
-        if not token:
-            return True
-        path = urllib.parse.urlsplit(self.path).path
-        if not path.startswith("/api/"):
-            return True
-        supplied = self.headers.get("X-GPTA-Token", "")
-        authorization = self.headers.get("Authorization", "")
-        if authorization.lower().startswith("bearer "):
-            supplied = authorization[7:].strip()
-        return hmac.compare_digest(supplied, token)
-
     # -- dispatch ------------------------------------------------------
     def _dispatch(self, fn: Callable[[], None]) -> None:
-        if not self._host_ok():
-            self.close_connection = True
-            self._json(403, {"error": "invalid Host header"})
-            return
-        if not self._authorized():
-            self.close_connection = True
-            self._json(401, {"error": "authentication required"})
-            return
         try:
             fn()
         except NotFound as exc:
@@ -301,6 +229,5 @@ def create_server(
     port: int,
     service: Service,
     web_root: Path,
-    auth_token: str = "",
 ) -> GptaHTTPServer:
-    return GptaHTTPServer((host, port), service, web_root, auth_token=auth_token)
+    return GptaHTTPServer((host, port), service, web_root)

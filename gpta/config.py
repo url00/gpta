@@ -16,7 +16,6 @@ DEFAULT_SERVER = {
     "host": "127.0.0.1",
     "port": 8787,
     "run_timeout_seconds": 120,
-    "auth_token": "",
 }
 DEFAULT_PRINTER = {
     "enabled": False,
@@ -172,11 +171,6 @@ def _normalise_server(raw: Any) -> dict[str, Any]:
         or not 5 <= result["run_timeout_seconds"] <= 3600
     ):
         raise ConfigError("server.run_timeout_seconds must be between 5 and 3600")
-    token = result["auth_token"]
-    if not isinstance(token, str):
-        raise ConfigError("server.auth_token must be a string")
-    if len(token) > 512:
-        raise ConfigError("server.auth_token is longer than 512 characters")
     return result
 
 

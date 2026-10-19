@@ -126,18 +126,19 @@ sequenced plan below does so **before** any new modules are added.
   last-tick heartbeat timestamp to `/api/state` so a frozen scheduler is
   visible in the UI (defense-in-depth behind 1.1/1.2).
 
-## Phase 3 — Security hardening for an unauthenticated local console
+## Phase 3 — Security hardening for a local console
 
-- [x] **3.1 Validate the `Host` header.** Without it, a DNS-rebinding page can
-  reach the console same-origin from a browser. Accept only the configured
-  host/localhost literals; 403 otherwise.
+- [x] **3.1 `Host` validation added, then removed.** The allowlist blocked the
+  public hostname forwarded by the Cloudflare tunnel. Any `Host` is accepted
+  now; access control is the external authentication layer.
 - [x] **3.2 Restrict the printer device path.** `printer.device` accepts any
   absolute path and the transport opens it `wb` — as-is, the API is an
   arbitrary-file-write primitive for any local process (or via 3.1). Restrict
   to paths under `/dev/` (and ideally character devices only).
-- [x] **3.3 Optional token auth** for deployments that bind beyond
-  `127.0.0.1`, so the safety story doesn't depend solely on the bind address.
-  (README already warns about this — make it enforceable.)
+- [x] **3.3 Auth boundary documented.** An optional bearer-token check was
+  added, then removed: deployments are fronted by an authenticating layer
+  (Cloudflare Access/OAuth), so a second credential was redundant. The README
+  now makes that deployment requirement explicit.
 - [x] **3.4** Confirm the existing CSRF posture holds as endpoints are added:
   the JSON `Content-Type` requirement currently blocks cross-origin
   state-changing simple requests; keep that invariant and note it in

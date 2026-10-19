@@ -30,12 +30,7 @@ unit_registered() {
 wait_for_health() {
   local i
   for i in $(seq 1 20); do
-    if [ -n "${GPTA_AUTH_TOKEN:-}" ]; then
-      if curl -fsS -H "Authorization: Bearer ${GPTA_AUTH_TOKEN}" \
-        "http://${HOST}:${PORT}/api/state" >/dev/null 2>&1; then
-        return 0
-      fi
-    elif curl -fsS "http://${HOST}:${PORT}/api/state" >/dev/null 2>&1; then
+    if curl -fsS "http://${HOST}:${PORT}/api/state" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.25

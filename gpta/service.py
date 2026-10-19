@@ -97,7 +97,6 @@ class Service:
         self.modules_dir = Path(modules_dir) if modules_dir else None
         self.bound_host: str | None = None
         self.bound_port: int | None = None
-        self.auth_required: bool = False
         self.registry_errors: dict[str, str] = dict(registry_errors or {})
 
         settings = self.config.snapshot()
@@ -542,7 +541,6 @@ class Service:
                     and tick_age is not None
                     and tick_age > SCHEDULER_STALE_SECONDS
                 ),
-                "auth_required": self.auth_required,
                 "config_path": str(self.config.path),
                 "modules_dir": str(self.modules_dir) if self.modules_dir else "",
             }

@@ -104,17 +104,11 @@ def main(argv: list[str] | None = None) -> int:
     host = args.host or settings["server"]["host"]
     port = args.port if args.port is not None else settings["server"]["port"]
 
-    token = (
-        os.environ.get("GPTA_AUTH_TOKEN") or settings["server"]["auth_token"]
-    ).strip()
-    if token:
-        log.info("API token authentication enabled")
-    elif not _is_loopback(host):
+    if not _is_loopback(host):
         log.warning(
-            "HTTP API bound to %s without authentication; set GPTA_AUTH_TOKEN "
-            "or server.auth_token in %s",
+            "HTTP API bound to %s; GPTA has no authentication. Put it behind "
+            "an authenticating reverse proxy or tunnel such as Cloudflare Access",
             host,
-            config.path,
         )
 
     service = Service(
@@ -127,8 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     service.bound_host = host
     service.bound_port = port
-    service.auth_required = bool(token)
-    server = create_server(host, port, service, web_root, auth_token=token)
+    server = create_server(host, port, service, web_root)
 
     stop_event = threading.Event()
 

@@ -133,12 +133,16 @@ active run per module, truncated receipts and HTTP bodies, bounded cache/logs,
 failure backoff, and printer serialization. See
 [docs/safety.md](docs/safety.md) for the full failure matrix and known limits.
 
-The console validates the `Host` header against the configured host and
-localhost/IP literals (DNS-rebinding protection) and rejects state-changing
-requests without `Content-Type: application/json` (CSRF protection). It binds
-to `127.0.0.1` by default; if you bind elsewhere, set `GPTA_AUTH_TOKEN` (or
-`server.auth_token`) to require `Authorization: Bearer <token>` on `/api/*`.
-Do not expose the console to untrusted networks.
+The console rejects state-changing requests without
+`Content-Type: application/json` (CSRF protection) and accepts any `Host`
+header, so a reverse proxy or tunnel can forward the public hostname. It binds
+to `127.0.0.1` by default.
+
+**GPTA has no authentication of its own.** When it is reachable beyond
+loopback, it MUST be hosted behind another authentication layer, such as a
+Cloudflare Tunnel protected by Access/OAuth, an authenticating reverse proxy,
+or a private network/VPN. Never expose the HTTP port directly to untrusted
+networks.
 
 ## HTTP API
 
@@ -154,8 +158,8 @@ Do not expose the console to untrusted networks.
 
 JSON request bodies require `Content-Type: application/json`. Unknown modules
 and outputs return 404, invalid configuration returns 400, a concurrent
-manual run returns 409, a rate-limited test print returns 429, and a missing
-token returns 401. `/api/state` no longer embeds logs; fetch them
+manual run returns 409, and a rate-limited test print returns 429.
+`/api/state` no longer embeds logs; fetch them
 incrementally with `/api/logs?since=N`. It reports
 `server.last_tick_age_seconds`/`scheduler_stale`, per-module
 `consecutive_failures`/`effective_interval_seconds`, printer
