@@ -12,39 +12,82 @@
       <h1>GPTA</h1>
       <span id="server-status" class="status">connecting...</span>
     </div>
-    <div class="printer-controls">
-      <label class="inline"><input type="checkbox" id="printer-enabled"> Printer enabled</label>
-      <label class="inline"><input type="checkbox" id="printer-auto"> Auto print</label>
-      <label class="inline">Width
-        <select id="printer-width">
-          <option value="32">32</option>
-          <option value="48">48</option>
-        </select>
-      </label>
-      <label class="inline grow">Device
-        <input id="printer-device" type="text" spellcheck="false" autocomplete="off">
-      </label>
-      <label class="inline grow" title="Raw CUPS queue; when set, used instead of the device">CUPS queue
-        <input id="printer-queue" type="text" spellcheck="false" autocomplete="off" placeholder="(use device)">
-      </label>
-      <button id="printer-save" type="button">Save printer</button>
-      <button id="printer-test" type="button" class="secondary">Test print</button>
-    </div>
-    <div id="printer-state" class="muted printer-state"></div>
+    <!-- To add a tab: add a button here and a matching section below.
+         data-tab is the URL hash; ids follow tab-<name> / panel-<name>. -->
+    <nav class="tabs" role="tablist" aria-label="Console sections">
+      <button type="button" role="tab" id="tab-about" data-tab="about" aria-controls="panel-about">About</button>
+      <button type="button" role="tab" id="tab-modules" data-tab="modules" aria-controls="panel-modules">Modules</button>
+      <button type="button" role="tab" id="tab-printer" data-tab="printer" aria-controls="panel-printer">Printer</button>
+    </nav>
   </header>
 
   <div id="banner" class="banner hidden" role="alert"></div>
 
   <main>
-    <section id="modules" class="modules" aria-label="Data modules"></section>
-    <aside class="simulator" aria-label="Printer simulator">
-      <div class="sim-head">
-        <h2>Printer simulator</h2>
-        <select id="sim-select" aria-label="Simulator source"></select>
+    <section id="panel-about" class="panel about" role="tabpanel" aria-labelledby="tab-about" tabindex="0">
+      <h2>About</h2>
+      <p>
+        GPTA is a small receipt printer appliance. A background server gathers
+        data from pluggable modules on a schedule, lays it out as receipts, and
+        prints them on a thermal printer. This page is its local console.
+      </p>
+      <p>
+        Modules start disabled. Enable and configure them on the
+        <a href="#modules" data-goto="modules">Modules</a> tab, and set up the
+        printer on the <a href="#printer" data-goto="printer">Printer</a> tab.
+      </p>
+      <h3>Server</h3>
+      <dl id="server-info" class="kv"></dl>
+    </section>
+
+    <section id="panel-modules" class="panel modules-panel" role="tabpanel" aria-labelledby="tab-modules" tabindex="0" hidden>
+      <div id="module-list" class="modules" aria-label="Data modules"></div>
+      <aside class="simulator" aria-label="Printer simulator">
+        <div class="sim-head">
+          <h2>Printer simulator</h2>
+          <select id="sim-select" aria-label="Simulator source"></select>
+        </div>
+        <div class="paper">
+          <img id="receipt-img" alt="" hidden>
+          <p id="receipt-empty" class="receipt-empty">No output yet.</p>
+        </div>
+        <div class="sim-foot">
+          <span id="sim-meta"></span>
+          <a id="sim-text" href="/api/output/total" target="_blank" rel="noopener">Plain text</a>
+        </div>
+      </aside>
+    </section>
+
+    <section id="panel-printer" class="panel printer-panel" role="tabpanel" aria-labelledby="tab-printer" tabindex="0" hidden>
+      <h2>Printer</h2>
+      <div class="printer-form">
+        <label class="check"><input type="checkbox" id="printer-enabled"> Printer enabled</label>
+        <label class="check"><input type="checkbox" id="printer-auto"> Auto print</label>
+        <label class="field">Paper
+          <select id="printer-paper">
+            <option value="80mm">80mm</option>
+            <option value="58mm">58mm</option>
+          </select>
+        </label>
+        <label class="field">Device
+          <input id="printer-device" type="text" spellcheck="false" autocomplete="off">
+        </label>
+        <label class="field" title="Raw CUPS queue; when set, used instead of the device">CUPS queue
+          <input id="printer-queue" type="text" spellcheck="false" autocomplete="off" placeholder="(use device)">
+        </label>
       </div>
-      <div class="paper"><pre id="receipt"></pre></div>
-      <div id="sim-meta" class="muted"></div>
-    </aside>
+      <div class="actions">
+        <button id="printer-save" type="button">Save printer</button>
+        <button id="printer-test" type="button" class="secondary">Test print</button>
+      </div>
+      <p id="printer-state" class="printer-state"></p>
+
+      <div class="logs-head">
+        <h3>Logs</h3>
+        <select id="log-filter" aria-label="Show logs from"></select>
+      </div>
+      <ul id="log-list" class="logs" aria-live="off"></ul>
+    </section>
   </main>
 
   <script src="/static/app.js"></script>

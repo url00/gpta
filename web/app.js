@@ -1,12 +1,22 @@
 "use strict";
 
-const modulesEl = document.getElementById("modules");
+const modulesEl = document.getElementById("module-list");
 const simSelect = document.getElementById("sim-select");
-const receiptEl = document.getElementById("receipt");
+const receiptImg = document.getElementById("receipt-img");
+const receiptEmpty = document.getElementById("receipt-empty");
 const simMeta = document.getElementById("sim-meta");
+const simText = document.getElementById("sim-text");
 const bannerEl = document.getElementById("banner");
 const serverStatus = document.getElementById("server-status");
+const serverInfo = document.getElementById("server-info");
 const printerState = document.getElementById("printer-state");
+const logFilter = document.getElementById("log-filter");
+const logList = document.getElementById("log-list");
+
+const DEFAULT_TAB = "about";
+const DEFAULT_PAPER = "80mm";
+const LOG_SHOWN = 300;
+const SERVER_LOGS = "__server__";
 
 let state = null;
 let selected = "total";
@@ -14,6 +24,9 @@ let refreshing = false;
 let bannerTimer = null;
 let logEntries = [];
 let nextLogSeq = null;
+let logView = "";        // key of what the log list currently shows
+let imgUrl = null;       // receipt image URL currently requested
+let imgFailed = null;    // receipt image URL that last failed to load
 const cards = new Map();
 
 function make(tag, className, text) {
@@ -61,6 +74,70 @@ function setValueIfIdle(input, value) {
   else input.value = value === null || value === undefined ? "" : String(value);
 }
 
+// ---- tabs ------------------------------------------------------------
+// Tabs are discovered from the markup: every [role=tab] in the tablist
+// with a data-tab name and aria-controls pointing at its panel. The URL
+// hash (#about, #modules, ...) holds the current tab.
+
+const tabs = [...document.querySelectorAll('.tabs [role="tab"]')];
+
+function tabNames() {
+  return tabs.map((tab) => tab.dataset.tab);
+}
+
+function tabFromHash() {
+  const name = decodeURIComponent(location.hash.replace(/^#/, ""));
+  return tabNames().includes(name) ? name : DEFAULT_TAB;
+}
+
+function showTab(name, { focus = false } = {}) {
+  for (const tab of tabs) {
+    const active = tab.dataset.tab === name;
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+    tab.tabIndex = active ? 0 : -1;
+    document.getElementById(tab.getAttribute("aria-controls")).hidden = !active;
+    if (active && focus) tab.focus();
+  }
+}
+
+// replace=true for arrow-key moves so they don't flood the history.
+function goToTab(name, { focus = false, replace = false } = {}) {
+  if (!tabNames().includes(name)) name = DEFAULT_TAB;
+  if (location.hash !== `#${name}`) {
+    if (replace) history.replaceState(null, "", `#${name}`);
+    else history.pushState(null, "", `#${name}`);
+  }
+  showTab(name, { focus });
+}
+
+function bindTabs() {
+  for (const [index, tab] of tabs.entries()) {
+    tab.addEventListener("click", () => goToTab(tab.dataset.tab));
+    tab.addEventListener("keydown", (event) => {
+      let next = null;
+      if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+      else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = tabs.length - 1;
+      if (next === null) return;
+      event.preventDefault();
+      goToTab(tabs[next].dataset.tab, { focus: true, replace: true });
+    });
+  }
+  // In-page links such as <a data-goto="modules">.
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-goto]");
+    if (!link) return;
+    event.preventDefault();
+    goToTab(link.dataset.goto, { focus: true });
+  });
+  window.addEventListener("popstate", () => showTab(tabFromHash()));
+  window.addEventListener("hashchange", () => showTab(tabFromHash()));
+  showTab(tabFromHash());
+}
+
+// ---- module cards ----------------------------------------------------
+
 function schemaInput(schema, value, key, kind) {
   let input;
   if (schema.type === "bool") {
@@ -96,6 +173,14 @@ function field(labelText, input) {
   const wrap = make("label", "field");
   wrap.append(make("span", "", labelText), input);
   return wrap;
+}
+
+function outputLink(key, suffix, text) {
+  const link = make("a", "", text);
+  link.href = `/api/output/${encodeURIComponent(key)}${suffix}`;
+  link.target = "_blank";
+  link.rel = "noopener";
+  return link;
 }
 
 function buildCard(module) {
@@ -145,11 +230,9 @@ function buildCard(module) {
   save.type = "button";
   const run = make("button", "secondary", "Run now");
   run.type = "button";
-  const download = make("a", "", "Download");
-  download.href = `/api/output/${encodeURIComponent(module.id)}`;
-  download.target = "_blank";
-  download.rel = "noopener";
-  actions.append(save, run, download);
+  const links = make("span", "links");
+  links.append(outputLink(module.id, "", "Text"), outputLink(module.id, ".png", "Image"));
+  actions.append(save, run, links);
 
   const error = make("p", "card-error", "");
   const note = make("p", "card-note", "");
@@ -158,16 +241,16 @@ function buildCard(module) {
   details.append(make("h3", "", "Latest receipt"));
   const output = make("pre", "module-output", "");
   details.append(output);
-  details.append(make("h3", "", "Logs"));
-  const logs = make("ul", "logs");
-  details.append(logs);
+  const showLogs = make("button", "linkish", "Show logs for this module");
+  showLogs.type = "button";
+  details.append(showLogs);
 
   root.append(head, badges, fields, actions, error, note, details);
   modulesEl.append(root);
 
   const entry = {
     root, title, desc, enabled, badge, meta, interval,
-    fieldEntries, save, run, download, error, note, output, logs, module, busy: false,
+    fieldEntries, save, run, error, note, output, module, busy: false,
   };
   cards.set(module.id, entry);
 
@@ -198,6 +281,12 @@ function buildCard(module) {
       else if (result.print_skipped) showBanner(`${module.name}: not printed (${result.print_skipped})`);
       await refresh();
     });
+  });
+
+  showLogs.addEventListener("click", () => {
+    logFilter.value = module.id;
+    renderLogs();
+    goToTab("printer", { focus: true });
   });
 
   return entry;
@@ -257,61 +346,11 @@ function updateCard(entry, module) {
   entry.error.textContent = runtime.print_error || runtime.last_error || "";
   entry.note.textContent = runtime.print_skipped ? `Not printed: ${runtime.print_skipped}` : "";
   entry.output.textContent = module.output.text || "No output yet.";
-  entry.download.href = `/api/output/${encodeURIComponent(module.id)}`;
-  entry.logs.replaceChildren();
-  const moduleLogs = logEntries.filter((item) => item.module === module.id).slice(-40);
-  for (const item of moduleLogs) {
-    const li = make("li", `lvl-${item.level}`, `${item.ts} ${item.message}`);
-    entry.logs.append(li);
-  }
-  if (!moduleLogs.length) entry.logs.append(make("li", "muted", "No logs yet."));
 }
 
-function updatePrinter() {
-  const printer = state.printer;
-  setIfIdle(document.getElementById("printer-enabled"), printer.enabled);
-  setIfIdle(document.getElementById("printer-auto"), printer.auto_print);
-  setValueIfIdle(document.getElementById("printer-width"), printer.width);
-  setValueIfIdle(document.getElementById("printer-device"), printer.device);
-  setValueIfIdle(document.getElementById("printer-queue"), printer.cups_queue);
-  const target = printer.cups_queue ? `CUPS queue ${printer.cups_queue}` : printer.device;
-  const bits = [printer.enabled ? `printing to ${target}` : "simulator only"];
-  if (printer.last_print_at) bits.push(`last print ${printer.last_print_at}`);
-  if (printer.disabled_reason) bits.push(printer.disabled_reason);
-  if (printer.last_error) bits.push(`error: ${printer.last_error}`);
-  printerState.textContent = bits.join(" · ");
-}
+// ---- server, printer, simulator --------------------------------------
 
-function updateSimulator() {
-  const ids = state.modules.map((module) => module.id);
-  const wanted = ["total", ...ids];
-  const existing = [...simSelect.options].map((option) => option.value);
-  if (existing.join(",") !== wanted.join(",")) {
-    simSelect.replaceChildren();
-    simSelect.append(new Option("Total output", "total"));
-    for (const module of state.modules) simSelect.append(new Option(module.name, module.id));
-  }
-  if (!wanted.includes(selected)) selected = "total";
-  simSelect.value = selected;
-
-  let text = "";
-  let meta = "";
-  if (selected === "total") {
-    text = state.total.text || "No output from enabled modules.";
-    meta = `${state.total.module_ids.length} enabled module(s) · ${state.total.generated_at || "no output yet"}`;
-  } else {
-    const module = state.modules.find((item) => item.id === selected);
-    if (module) {
-      text = module.output.text || "No output yet for this module.";
-      meta = module.output.generated_at || "no output yet";
-    }
-  }
-  receiptEl.textContent = text;
-  receiptEl.style.width = `${Math.max(28, Number(state.printer.width) + 4)}ch`;
-  simMeta.textContent = meta;
-}
-
-function updateAll() {
+function updateServer() {
   const server = state.server;
   const bits = [
     `v${server.version}`,
@@ -328,6 +367,169 @@ function updateAll() {
   serverStatus.title = errors.map((item) => `${item.module}: ${item.error}`).join("\n");
   serverStatus.classList.toggle("error", Boolean(server.scheduler_stale));
 
+  const scheduler = [server.scheduler_running ? "running" : "stopped"];
+  if (server.scheduler_running && server.last_tick_age_seconds !== null) {
+    scheduler.push(`last tick ${server.last_tick_age_seconds}s ago`);
+  }
+  if (server.scheduler_stale) scheduler.push("STALLED");
+  const rows = [
+    ["Version", server.version],
+    ["Address", server.host && server.port ? `${server.host}:${server.port}` : ""],
+    ["Uptime", `${server.uptime_seconds}s`],
+    ["Scheduler", scheduler.join(" · ")],
+    ["Modules", `${state.modules.length} loaded, ${state.modules.filter((m) => m.enabled).length} enabled`],
+    ["Config", server.config_path],
+    ["Modules dir", server.modules_dir],
+  ];
+  for (const item of errors) rows.push(["Quarantined", `${item.module}: ${item.error}`]);
+  serverInfo.replaceChildren();
+  for (const [key, value] of rows) {
+    if (value === undefined || value === null || value === "") continue;
+    serverInfo.append(make("dt", "", key), make("dd", "", String(value)));
+  }
+}
+
+function updatePrinter() {
+  const printer = state.printer;
+  setIfIdle(document.getElementById("printer-enabled"), printer.enabled);
+  setIfIdle(document.getElementById("printer-auto"), printer.auto_print);
+  setValueIfIdle(document.getElementById("printer-paper"), printer.paper || DEFAULT_PAPER);
+  setValueIfIdle(document.getElementById("printer-device"), printer.device);
+  setValueIfIdle(document.getElementById("printer-queue"), printer.cups_queue);
+  const target = printer.cups_queue ? `CUPS queue ${printer.cups_queue}` : printer.device;
+  const bits = [printer.enabled ? `printing to ${target}` : "simulator only"];
+  if (printer.paper) bits.push(printer.width_px ? `${printer.paper} paper, ${printer.width_px}px` : `${printer.paper} paper`);
+  if (printer.last_print_at) bits.push(`last print ${printer.last_print_at}`);
+  if (printer.disabled_reason) bits.push(printer.disabled_reason);
+  if (printer.last_error) bits.push(`error: ${printer.last_error}`);
+  printerState.textContent = bits.join(" · ");
+}
+
+// Shows the image at url, or the placeholder when url is null or the image
+// failed to load. Only touches img.src when the URL changes, so polling
+// doesn't reload (and flicker) the same receipt.
+function showReceipt(url, emptyText) {
+  receiptEmpty.textContent = emptyText;
+  if (!url || url === imgFailed) {
+    receiptImg.hidden = true;
+    receiptEmpty.hidden = false;
+    return;
+  }
+  if (url !== imgUrl) {
+    imgUrl = url;
+    receiptImg.src = url;
+  }
+  // Keep showing the previous image until the new one has loaded.
+  if (receiptImg.complete && receiptImg.naturalWidth > 0) {
+    receiptImg.hidden = false;
+    receiptEmpty.hidden = true;
+  }
+}
+
+function bindReceiptImage() {
+  receiptImg.addEventListener("load", () => {
+    if (receiptImg.src.endsWith(imgUrl)) imgFailed = null;
+    receiptImg.hidden = false;
+    receiptEmpty.hidden = true;
+  });
+  receiptImg.addEventListener("error", () => {
+    imgFailed = imgUrl;
+    receiptImg.hidden = true;
+    receiptEmpty.hidden = false;
+  });
+}
+
+function updateSimulator() {
+  const ids = state.modules.map((module) => module.id);
+  const wanted = ["total", ...ids];
+  const existing = [...simSelect.options].map((option) => option.value);
+  if (existing.join(",") !== wanted.join(",")) {
+    simSelect.replaceChildren();
+    simSelect.append(new Option("Total output", "total"));
+    for (const module of state.modules) simSelect.append(new Option(module.name, module.id));
+  }
+  if (!wanted.includes(selected)) selected = "total";
+  simSelect.value = selected;
+
+  let generatedAt = null;
+  let empty = "";
+  let meta = "";
+  if (selected === "total") {
+    generatedAt = state.total.generated_at;
+    empty = "No output from enabled modules.";
+    meta = `${state.total.module_ids.length} enabled module(s) · ${generatedAt || "no output yet"}`;
+  } else {
+    const module = state.modules.find((item) => item.id === selected);
+    if (module) {
+      generatedAt = module.output.generated_at;
+      empty = "No output yet for this module.";
+      meta = generatedAt || "no output yet";
+    }
+  }
+  const key = encodeURIComponent(selected);
+  const url = generatedAt ? `/api/output/${key}.png?v=${encodeURIComponent(generatedAt)}` : null;
+  showReceipt(url, empty);
+  receiptImg.alt = `Receipt preview: ${simSelect.selectedOptions[0]?.textContent || selected}`;
+  simText.href = `/api/output/${key}`;
+  simMeta.textContent = meta;
+}
+
+// ---- logs -------------------------------------------------------------
+
+function updateLogFilter() {
+  const wanted = [["", "All logs"], [SERVER_LOGS, "Server"]];
+  for (const module of state.modules) wanted.push([module.id, module.name]);
+  const existing = [...logFilter.options].map((option) => option.value);
+  if (existing.join(",") === wanted.map(([value]) => value).join(",")) return;
+  const current = logFilter.value;
+  logFilter.replaceChildren();
+  for (const [value, label] of wanted) logFilter.append(new Option(label, value));
+  logFilter.value = wanted.some(([value]) => value === current) ? current : "";
+}
+
+function renderLogs() {
+  const filter = logFilter.value;
+  const last = logEntries.length ? logEntries[logEntries.length - 1].seq : 0;
+  const view = `${filter}|${last}|${logEntries.length}`;
+  if (view === logView) return;
+  logView = view;
+
+  let shown = logEntries;
+  if (filter === SERVER_LOGS) shown = shown.filter((item) => !item.module);
+  else if (filter) shown = shown.filter((item) => item.module === filter);
+  shown = shown.slice(-LOG_SHOWN);
+
+  const atBottom = logList.scrollHeight - logList.scrollTop - logList.clientHeight < 8;
+  logList.replaceChildren();
+  for (const item of shown) {
+    const li = make("li", `lvl-${item.level}`);
+    const source = item.module ? ` [${item.module}]` : "";
+    li.append(
+      document.createTextNode(`${item.ts} `),
+      make("span", "lvl", item.level),
+      document.createTextNode(`${source} ${item.message}`),
+    );
+    logList.append(li);
+  }
+  if (!shown.length) logList.append(make("li", "", "No logs yet."));
+  if (atBottom) logList.scrollTop = logList.scrollHeight;
+}
+
+async function refreshLogs() {
+  const since = nextLogSeq === null ? 0 : nextLogSeq;
+  const data = await api(`/api/logs?since=${since}`);
+  const entries = data.entries || [];
+  if (entries.length) {
+    logEntries.push(...entries);
+    if (logEntries.length > 2000) logEntries = logEntries.slice(-2000);
+  }
+  nextLogSeq = data.next === undefined ? since : data.next;
+}
+
+// ---- polling ------------------------------------------------------------
+
+function updateAll() {
+  updateServer();
   updatePrinter();
 
   const seen = new Set();
@@ -343,17 +545,8 @@ function updateAll() {
     }
   }
   updateSimulator();
-}
-
-async function refreshLogs() {
-  const since = nextLogSeq === null ? 0 : nextLogSeq;
-  const data = await api(`/api/logs?since=${since}`);
-  const entries = data.entries || [];
-  if (entries.length) {
-    logEntries.push(...entries);
-    if (logEntries.length > 2000) logEntries = logEntries.slice(-2000);
-  }
-  nextLogSeq = data.next === undefined ? since : data.next;
+  updateLogFilter();
+  renderLogs();
 }
 
 async function refresh() {
@@ -382,7 +575,7 @@ function bindPrinterControls() {
         body: {
           enabled: document.getElementById("printer-enabled").checked,
           auto_print: document.getElementById("printer-auto").checked,
-          width: Number(document.getElementById("printer-width").value),
+          paper: document.getElementById("printer-paper").value,
           device: document.getElementById("printer-device").value,
           cups_queue: document.getElementById("printer-queue").value.trim(),
         },
@@ -403,11 +596,18 @@ function bindSimulator() {
     selected = simSelect.value;
     if (state) updateSimulator();
   });
+  bindReceiptImage();
+}
+
+function bindLogs() {
+  logFilter.addEventListener("change", renderLogs);
 }
 
 async function init() {
+  bindTabs();
   bindPrinterControls();
   bindSimulator();
+  bindLogs();
   await refresh();
   setInterval(refresh, 2000);
 }
