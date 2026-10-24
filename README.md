@@ -122,7 +122,7 @@ across the full width (to check the printable edges), and a bar chart.
 
 Writes are serialized and time-limited. Scheduled prints are spaced at least
 `printer.min_print_spacing_seconds` apart (default 30); prints you ask for
-(**Run now**, **Test print**, **Instant** prints) skip the spacing. All prints count toward
+(**Run now**, **Test print**, **Instant** and web page prints) skip the spacing. All prints count toward
 `printer.max_prints_per_hour` (default 60). A skipped print is logged and the
 module card shows why ("Not printed: ..."); a test print over the hourly cap
 returns 429. After `printer.failure_threshold` consecutive failures (default
@@ -154,6 +154,8 @@ limits.
 | PATCH | `/api/printer` | Update printer settings |
 | POST | `/api/instant/preview` | Image of `{"text", "size"}` as an instant print would draw it (`png` data URL) |
 | POST | `/api/instant/print` | Print `{"text", "size"}` once; `size` is `small`, `body`, `large` or `huge`, text up to 5000 characters |
+| POST | `/api/reader/fetch` | Fetch `{"url"}` and return it reader-mode style: `title`, `url`, `blocks`, `chars`, `png` preview. Public http(s) sites only; at most 8000 characters are kept |
+| POST | `/api/reader/print` | Print `{"blocks"}` from a fetch, exactly as previewed |
 | POST | `/api/printer/test` | Print a test page |
 
 Writes need a JSON body (`{}` or empty is fine). Errors: 400 invalid request or

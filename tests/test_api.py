@@ -337,6 +337,55 @@ class ApiTests(unittest.TestCase):
         status, _, _ = self.request("POST", "/api/instant/print", {"text": ""})
         self.assertEqual(status, 400)
 
+    def test_reader_fetch_and_print(self):
+        from gpta.reader import Page, ReaderError
+
+        html = (
+            "<html><head><title>A walk – Blog</title></head><body><article>"
+            "<p>The receipt printer hums along quietly, line after line.</p>"
+            "</article></body></html>"
+        )
+        seen = []
+
+        def fetcher(url):
+            seen.append(url)
+            if url == "https://bad.example/":
+                raise ReaderError("the site answered HTTP 404")
+            return Page("https://blog.example/walk", html)
+
+        self.service.reader_fetcher = fetcher
+        status, body, _ = self.request(
+            "POST", "/api/reader/fetch", {"url": "https://blog.example/walk"}
+        )
+        self.assertEqual(status, 200, body)
+        result = json.loads(body)
+        self.assertEqual(result["title"], "A walk")
+        self.assertEqual(result["url"], "https://blog.example/walk")
+        self.assertTrue(result["png"].startswith("data:image/png;base64,"))
+        self.assertEqual(result["blocks"][0], {"kind": "heading", "text": "A walk"})
+        self.assertGreater(result["chars"], 20)
+
+        status, body, _ = self.request(
+            "POST", "/api/reader/fetch", {"url": "https://bad.example/"}
+        )
+        self.assertEqual(
+            (status, json.loads(body)["error"]), (400, "the site answered HTTP 404")
+        )
+
+        # The printer is disabled in these tests.
+        status, _, _ = self.request(
+            "POST", "/api/reader/print", {"blocks": result["blocks"]}
+        )
+        self.assertEqual(status, 409)
+        for bad in (
+            {},
+            {"blocks": []},
+            {"blocks": [{"kind": "nope"}]},
+            {"blocks": "x"},
+        ):
+            status, _, _ = self.request("POST", "/api/reader/print", bad)
+            self.assertEqual(status, 400, bad)
+
 
 if __name__ == "__main__":
     unittest.main()

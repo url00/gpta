@@ -675,6 +675,50 @@ function bindInstant() {
   updateInstantPreview();
 }
 
+// ---- reader mode -----------------------------------------------------
+const readerUrl = document.getElementById("reader-url");
+const readerImg = document.getElementById("reader-img");
+const readerEmpty = document.getElementById("reader-empty");
+const readerMeta = document.getElementById("reader-meta");
+const readerNote = document.getElementById("reader-note");
+const readerPrint = document.getElementById("reader-print");
+let readerBlocks = null; // what the preview shows; printed as-is
+
+function bindReader() {
+  const fetchButton = document.getElementById("reader-fetch");
+  const fetchPage = () => busy(fetchButton, async () => {
+    const url = readerUrl.value.trim();
+    if (!url) throw new Error("Paste a page URL first.");
+    readerMeta.textContent = "Fetching...";
+    readerNote.textContent = "";
+    try {
+      const page = await api("/api/reader/fetch", { method: "POST", body: { url } });
+      readerBlocks = page.blocks;
+      readerImg.src = page.png;
+      readerImg.hidden = false;
+      readerEmpty.hidden = true;
+      readerPrint.disabled = false;
+      const length = (page.height_px / 8 / 10).toFixed(0); // 8 dots per mm
+      readerMeta.textContent = `${page.title || page.url} · ${page.chars} characters · about ${length} cm of paper`;
+    } catch (error) {
+      readerMeta.textContent = "";
+      throw error;
+    }
+  });
+  fetchButton.addEventListener("click", fetchPage);
+  readerUrl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") fetchPage();
+  });
+  readerPrint.addEventListener("click", () => {
+    busy(readerPrint, async () => {
+      if (!readerBlocks) throw new Error("Fetch a page first.");
+      await api("/api/reader/print", { method: "POST", body: { blocks: readerBlocks } });
+      readerNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.`;
+      await refresh();
+    });
+  });
+}
+
 function bindSimulator() {
   simSelect.addEventListener("change", () => {
     selected = simSelect.value;
@@ -690,6 +734,7 @@ function bindLogs() {
 async function init() {
   bindTabs();
   bindInstant();
+  bindReader();
   bindPrinterControls();
   bindSimulator();
   bindLogs();

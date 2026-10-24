@@ -15,8 +15,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__
-from .blocks import SIZES, Text
+from . import __version__, reader
+from .blocks import SIZES, Text, from_dict, text_of, to_dict
 from .config import PAPERS, ConfigStore
 from .errors import InvalidRequest, NotFound
 from .http import HttpClient
@@ -25,7 +25,14 @@ from .module_api import Module
 from .outputs import OutputStore
 from .printing import Printer, PrinterWriter
 from .registry import describe
-from .renderer import Receipt, render_image, render_text, test_receipt, to_png
+from .renderer import (
+    Receipt,
+    build_receipt,
+    render_image,
+    render_text,
+    test_receipt,
+    to_png,
+)
 from .runner import ModuleRunner, module_log
 from .scheduler import Scheduler
 from .state import StateStore
@@ -48,6 +55,15 @@ def instant_receipt(body: Any) -> Receipt:
     return Receipt(title="", elements=(Text(text.strip("\n"), size=size),), stamp="")
 
 
+#: Longest article text the reader keeps; the rest is cut with a marker.
+READER_MAX_CHARS = 8000
+READER_MAX_BLOCKS = 600
+
+
+def _png_url(image) -> str:
+    return "data:image/png;base64," + base64.b64encode(to_png(image)).decode("ascii")
+
+
 class Service:
     def __init__(
         self,
@@ -66,6 +82,8 @@ class Service:
         self.registry = registry
         self.logbus = logbus
         self.clock = clock
+        # Replaced in tests so reader-mode fetches need no network.
+        self.reader_fetcher = reader.fetch_page
         self.monotonic = monotonic
         self.modules_dir = Path(modules_dir) if modules_dir else None
         self.registry_errors: dict[str, str] = dict(registry_errors or {})
@@ -142,11 +160,9 @@ class Service:
 
     def instant_preview(self, body: Any) -> dict[str, Any]:
         """The image an instant print would produce, as a PNG data URL."""
-        image = render_image(
-            instant_receipt(body), _paper(self.config.snapshot())["width_px"]
-        )
-        data = base64.b64encode(to_png(image)).decode("ascii")
-        return {"png": f"data:image/png;base64,{data}", "height_px": image.height}
+        width_px = _paper(self.config.snapshot())["width_px"]
+        image = render_image(instant_receipt(body), width_px)
+        return {"png": _png_url(image), "height_px": image.height}
 
     def instant_print(self, body: Any) -> dict[str, Any]:
         receipt = instant_receipt(body)
@@ -154,6 +170,52 @@ class Service:
         self.printer.submit(render_image(receipt, width_px), "instant", manual=True)
         module_log(f"instant print: {len(receipt.elements[0].text)} characters")
         return {"ok": True}
+
+    def reader_fetch(self, body: Any) -> dict[str, Any]:
+        """Fetch a web page and return it as reader-mode receipt blocks.
+
+        The blocks go back to the console, which sends them to
+        :meth:`reader_print`, so what prints is exactly what was previewed.
+        """
+        url = body.get("url") if isinstance(body, dict) else None
+        try:
+            page = self.reader_fetcher(url)
+            article = reader.extract(page.html, page.url)
+        except reader.ReaderError as exc:
+            raise InvalidRequest(str(exc)) from exc
+        receipt = self._reader_receipt(article.elements(), READER_MAX_CHARS)
+        module_log(f"reader fetched {page.url}")
+        image = render_image(receipt, _paper(self.config.snapshot())["width_px"])
+        return {
+            "title": article.title,
+            "url": page.url,
+            "blocks": [to_dict(element) for element in receipt.elements],
+            "chars": sum(len(text_of(element)) for element in receipt.elements),
+            "png": _png_url(image),
+            "height_px": image.height,
+        }
+
+    def reader_print(self, body: Any) -> dict[str, Any]:
+        raw = body.get("blocks") if isinstance(body, dict) else None
+        if not isinstance(raw, list) or not raw:
+            raise InvalidRequest("nothing to print; fetch a page first")
+        if len(raw) > READER_MAX_BLOCKS:
+            raise InvalidRequest(f"at most {READER_MAX_BLOCKS} blocks can be printed")
+        try:
+            elements = [from_dict(item) for item in raw]
+        except ValueError as exc:
+            raise InvalidRequest(f"invalid block: {exc}") from exc
+        # The preview was already cut to the limit; the slack covers the
+        # header and the truncation marker.
+        receipt = self._reader_receipt(elements, READER_MAX_CHARS + 2000)
+        width_px = _paper(self.config.snapshot())["width_px"]
+        self.printer.submit(render_image(receipt, width_px), "reader", manual=True)
+        module_log(f"reader print: {len(elements)} blocks")
+        return {"ok": True}
+
+    def _reader_receipt(self, elements: list, max_chars: int) -> Receipt:
+        now = datetime.fromtimestamp(self.clock(), UTC)
+        return build_receipt("", elements, max_chars, now)
 
     # -- snapshots -----------------------------------------------------
     def snapshot(self) -> dict[str, Any]:

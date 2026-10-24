@@ -62,6 +62,8 @@ ROUTES: list[tuple[str, re.Pattern[str], str]] = [
         ("POST", r"/api/printer/test", "test_printer"),
         ("POST", r"/api/instant/preview", "instant_preview"),
         ("POST", r"/api/instant/print", "instant_print"),
+        ("POST", r"/api/reader/fetch", "reader_fetch"),
+        ("POST", r"/api/reader/print", "reader_print"),
     )
 ]
 
@@ -187,6 +189,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _h_instant_print(self) -> None:
         self._json(200, self.server.service.instant_print(self._body_json))
+
+    def _h_reader_fetch(self) -> None:
+        self._json(200, self.server.service.reader_fetch(self._body_json))
+
+    def _h_reader_print(self) -> None:
+        self._json(200, self.server.service.reader_print(self._body_json))
 
     # -- dispatch ------------------------------------------------------
     def _dispatch(self) -> None:

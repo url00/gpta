@@ -56,6 +56,13 @@ records what happens when things go wrong.
 - **`Host` allowlist:** requests are answered only when the `Host` header is
   in `server.allowed_hosts` (plus the bind address). This is the DNS-rebinding
   guard. Tunneled public hostnames must be listed explicitly.
+- **Web page fetches (reader mode):** `/api/reader/fetch` downloads a URL from
+  the server, so it is guarded against reaching the local network: only
+  http/https, no credentials in the URL, no proxies, and a host whose
+  addresses are all loopback, private, link-local, shared or reserved is
+  refused before connecting. The connected socket's peer is checked again
+  (covering DNS answers that change), and so is every redirect. Pages are
+  capped at 3 MB and must be HTML.
 - **Printer device:** configuration is restricted to normalised paths under
   `/dev/`; the transport resolves symlinks, requires the target to stay under
   `/dev/`, and refuses non-character devices.

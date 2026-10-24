@@ -98,6 +98,17 @@ class PrinterSafetyTests(unittest.TestCase):
         self.assertEqual(image.width, 576)
         self.assertEqual(self.service.printer.status()["last_job"]["module"], "instant")
 
+    def test_reader_print(self):
+        self.enable_printer(auto_print=False)
+        blocks = [
+            {"kind": "heading", "text": "Title"},
+            {"kind": "text", "text": "Body"},
+        ]
+        with patch("gpta.printing.transport.send_to_device") as send:
+            self.service.reader_print({"blocks": blocks})
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(self.service.printer.status()["last_job"]["module"], "reader")
+
     def scheduled_run(self):
         return self.service.runner.run("fake", trigger="schedule")
 

@@ -55,6 +55,25 @@
           <p id="instant-empty" class="receipt-empty">Preview appears here.</p>
         </div>
       </aside>
+
+      <section class="reader" aria-labelledby="reader-title">
+        <h2 id="reader-title">Print a web page</h2>
+        <p class="desc">Paste a link to an article. Its text is pulled out, reader-mode style, and laid out as a receipt.</p>
+        <label class="field" for="reader-url">Page URL</label>
+        <div class="reader-fetch">
+          <input id="reader-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://example.com/article">
+          <button id="reader-fetch" type="button">Fetch</button>
+        </div>
+        <p id="reader-meta" class="meta"></p>
+        <div class="paper">
+          <img id="reader-img" alt="Web page print preview" hidden>
+          <p id="reader-empty" class="receipt-empty">Fetch a page to preview it.</p>
+        </div>
+        <div class="actions">
+          <button id="reader-print" type="button" disabled>Print page</button>
+        </div>
+        <p id="reader-note" class="card-note"></p>
+      </section>
     </section>
 
     <section id="panel-about" class="panel about" role="tabpanel" aria-labelledby="tab-about" tabindex="0" hidden>
