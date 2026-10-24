@@ -58,6 +58,11 @@ the unit name and command.
 
 Logs: `data/server.log` (rotated) for manual starts, the journal under systemd.
 
+Restarts are safe: `data/state.json` records when each module last ran, how
+it went, and its latest receipt, so a restart only runs modules that are due
+(for example, one whose daily run was missed while the server was down runs
+once). Delete the file to make every enabled module run on the next start.
+
 ## Modules
 
 | Module | Interval | Limits | Options |

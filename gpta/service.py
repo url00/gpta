@@ -25,6 +25,7 @@ from .printing import Printer, PrinterWriter, test_receipt
 from .registry import describe
 from .runner import ModuleRunner, module_log
 from .scheduler import Scheduler
+from .state import StateStore
 
 
 class Service:
@@ -64,6 +65,7 @@ class Service:
             self.printer,
             http or HttpClient(),
             fetch_timeout=fetch_timeout,
+            state=StateStore(config.data_dir / "state.json"),
             clock=clock,
             monotonic=monotonic,
         )

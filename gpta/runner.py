@@ -21,6 +21,7 @@ from .printing import (
     PrinterRateLimited,
 )
 from .renderer import render_receipt
+from .state import StateStore
 
 log = logging.getLogger("gpta.runner")
 
@@ -49,6 +50,9 @@ def module_log(message: str, level: str = "info", module: str | None = None) -> 
 @dataclass
 class ModuleRuntime:
     last_run_at: str | None = None
+    # Wall-clock time of the last run, saved across restarts.
+    last_run_ts: float | None = None
+    # The same moment on the monotonic clock, which scheduling uses.
     last_run_mono: float | None = None
     last_ok: bool | None = None
     last_error: str | None = None
@@ -95,10 +99,12 @@ class ModuleRunner:
         http: Any,
         *,
         fetch_timeout: float,
+        state: StateStore | None = None,
         clock=time.time,
         monotonic=time.monotonic,
     ):
         self.config = config
+        self.state = state
         self.registry = registry
         self.outputs = outputs
         self.printer = printer
@@ -110,6 +116,11 @@ class ModuleRunner:
         self._lock = threading.RLock()
         self._runtime = {module_id: ModuleRuntime() for module_id in registry}
         self._stuck: dict[str, threading.Thread] = {}
+        # Serialises saves so an older snapshot never overwrites a newer one.
+        # Order: persist lock -> runner lock.
+        self._persist_lock = threading.Lock()
+        if state is not None:
+            self._restore(state.load_modules())
 
     # -- running -------------------------------------------------------
     def run(self, module_id: str, trigger: str = "manual") -> dict[str, Any]:
@@ -206,12 +217,14 @@ class ModuleRunner:
                 runtime = self._runtime[module_id]
                 runtime.running = False
                 runtime.last_run_mono = self.monotonic()
+                runtime.last_run_ts = self.clock()
                 runtime.last_run_at = self._iso_now()
                 runtime.run_count += 1
                 runtime.last_duration_ms = int(
                     round((self.monotonic() - started) * 1000)
                 )
 
+        self._persist()
         result: dict[str, Any] = {"ok": error is None, "printed": printed}
         with self._lock:
             result["print_skipped"] = self._runtime[module_id].print_skipped
@@ -334,6 +347,73 @@ class ModuleRunner:
                 "consecutive_failures": runtime.consecutive_failures,
                 "effective_interval_seconds": interval,
             }
+
+    # -- persistence ---------------------------------------------------
+    def _restore(self, saved: dict[str, dict[str, Any]]) -> None:
+        """Load saved state so a restart does not re-run every module."""
+        now_ts, now_mono = self.clock(), self.monotonic()
+        for module_id, entry in saved.items():
+            runtime = self._runtime.get(module_id)
+            if runtime is None:
+                continue
+            ts = entry.get("last_run_ts")
+            if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+                # Map the saved wall-clock time onto this process's monotonic
+                # clock. A run "in the future" (the clock went backwards)
+                # counts as just now, so it cannot cause a burst of runs.
+                elapsed = max(0.0, now_ts - float(ts))
+                runtime.last_run_ts = float(ts)
+                runtime.last_run_mono = now_mono - elapsed
+            for name, kinds in (
+                ("last_run_at", (str,)),
+                ("last_ok", (bool,)),
+                ("last_error", (str,)),
+                ("last_duration_ms", (int,)),
+            ):
+                value = entry.get(name)
+                if isinstance(value, kinds):
+                    setattr(runtime, name, value)
+            for name in ("run_count", "consecutive_failures"):
+                value = entry.get(name)
+                if type(value) is int and value >= 0:
+                    setattr(runtime, name, value)
+            output = entry.get("output")
+            if isinstance(output, dict):
+                lines = output.get("lines")
+                generated_at = output.get("generated_at")
+                if (
+                    isinstance(lines, list)
+                    and all(isinstance(line, str) for line in lines)
+                    and isinstance(generated_at, str)
+                ):
+                    self.outputs.set(module_id, lines, generated_at)
+
+    def _persist(self) -> None:
+        if self.state is None:
+            return
+        with self._persist_lock:
+            modules: dict[str, dict[str, Any]] = {}
+            with self._lock:
+                for module_id, runtime in self._runtime.items():
+                    if runtime.last_run_ts is None:
+                        continue
+                    modules[module_id] = {
+                        "last_run_ts": runtime.last_run_ts,
+                        "last_run_at": runtime.last_run_at,
+                        "last_ok": runtime.last_ok,
+                        "last_error": runtime.last_error,
+                        "last_duration_ms": runtime.last_duration_ms,
+                        "run_count": runtime.run_count,
+                        "consecutive_failures": runtime.consecutive_failures,
+                    }
+            for module_id, entry in modules.items():
+                output = self.outputs.get(module_id)
+                if output is not None:
+                    entry["output"] = {
+                        "lines": list(output.lines),
+                        "generated_at": output.generated_at,
+                    }
+            self.state.save_modules(modules)
 
     # -- helpers -------------------------------------------------------
     def _now(self) -> datetime:
