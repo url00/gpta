@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gpta.config import ConfigError, ConfigStore
+from gpta.config import ConfigError, ConfigStore, validate_module_defaults
 from gpta.module_api import Block, Module
 
 
@@ -91,6 +91,70 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             self.store.update_printer({"write_timeout_seconds": 0})
 
+    def write_raw(self, mutate):
+        data = json.loads(self.path.read_text())
+        mutate(data)
+        self.path.write_text(json.dumps(data))
+
+    def reload(self, module=None):
+        store = ConfigStore(self.path, {"echo": module or EchoModule()})
+        with self.assertLogs("gpta.config", "WARNING") as logs:
+            store.load()
+        return store, "\n".join(logs.output)
+
+    def test_new_schema_field_takes_default(self):
+        self.store.update_module("echo", {"enabled": True})
+
+        class EchoV2(EchoModule):
+            defaults = {
+                **EchoModule.defaults,
+                "options": {"text": "hello", "loud": False},
+            }
+            options_schema = {
+                **EchoModule.options_schema,
+                "loud": {"type": "bool", "label": "Loud"},
+            }
+
+        store = ConfigStore(self.path, {"echo": EchoV2()})
+        store.load()
+        cfg = store.module_config("echo")
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["options"], {"text": "hello", "loud": False})
+
+    def test_removed_and_invalid_fields_fall_back(self):
+        def mutate(data):
+            data["modules"]["echo"]["options"]["gone"] = 1
+            data["modules"]["echo"]["options"]["text"] = "x" * 500
+            data["modules"]["echo"]["interval_seconds"] = 1
+            data["modules"]["echo"]["enabled"] = True
+            data["printer"]["width"] = 40
+            data["printer"]["feed_lines"] = 5
+            data["server"]["bogus"] = True
+            data["extra"] = {}
+
+        self.write_raw(mutate)
+        store, logs = self.reload()
+        cfg = store.module_config("echo")
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["interval_seconds"], 60)
+        self.assertEqual(cfg["options"], {"text": "hello"})
+        printer = store.snapshot()["printer"]
+        self.assertEqual(printer["width"], 32)
+        self.assertEqual(printer["feed_lines"], 5)
+        for fragment in ("gone", "longer than", "interval_seconds", "width", "bogus", "extra"):
+            self.assertIn(fragment, logs)
+
+    def test_unreadable_file_is_fatal(self):
+        self.path.write_text("{not json")
+        with self.assertRaises(ConfigError):
+            ConfigStore(self.path, {"echo": EchoModule()}).load()
+
+    def test_api_updates_stay_strict(self):
+        with self.assertRaises(ConfigError):
+            self.store.update_module("echo", {"options": {"text": "x" * 500}})
+        with self.assertRaises(ConfigError):
+            self.store.update_module("echo", {"limits": "nope"})
+
     def test_unknown_module_config_ignored(self):
         data = json.loads(self.path.read_text())
         data["modules"]["ghost"] = {"enabled": True}
@@ -98,6 +162,27 @@ class ConfigTests(unittest.TestCase):
         store = ConfigStore(self.path, {"echo": EchoModule()})
         store.load()
         self.assertNotIn("ghost", store.snapshot()["modules"])
+
+
+class DefaultsValidationTests(unittest.TestCase):
+    def test_valid_defaults_pass(self):
+        validate_module_defaults(EchoModule())
+
+    def test_inconsistent_defaults_rejected(self):
+        class MissingOption(EchoModule):
+            defaults = {**EchoModule.defaults, "options": {}}
+
+        class BadValue(EchoModule):
+            defaults = {**EchoModule.defaults, "options": {"text": 5}}
+
+        class NoMaxChars(EchoModule):
+            limits_schema = {"max_items": EchoModule.limits_schema["max_items"]}
+            defaults = {**EchoModule.defaults, "limits": {"max_items": 1}}
+
+        for cls in (MissingOption, BadValue, NoMaxChars):
+            with self.subTest(cls=cls.__name__):
+                with self.assertRaises(ConfigError):
+                    validate_module_defaults(cls())
 
 
 if __name__ == "__main__":

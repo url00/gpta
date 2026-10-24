@@ -12,15 +12,18 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from . import DEFAULT_MODULES_DIR, DEFAULT_WEB_ROOT, __version__
-from .config import ConfigStore
+from .config import ConfigError, ConfigStore
 from .http import HttpClient
 from .httpserver import create_server
 from .logbus import BusLogHandler, LogBus
-from .registry import discover
+from .registry import RegistryError, discover
 from .service import Service
 
 LOG_MAX_BYTES = 1_000_000
 LOG_BACKUP_COUNT = 3
+# EX_CONFIG from sysexits.h. The systemd unit does not restart on this code,
+# so a broken config.json fails once with a clear message instead of looping.
+EXIT_CONFIG = 78
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,12 +97,13 @@ def main(argv: list[str] | None = None) -> int:
     log.addHandler(BusLogHandler(logbus))
 
     registry_errors: dict[str, str] = {}
-    modules = discover(modules_dir, errors=registry_errors)
-    for name, message in sorted(registry_errors.items()):
-        log.error("module %s quarantined: %s", name, message)
-
-    config = ConfigStore(data_dir / "config.json", modules)
-    config.load()
+    try:
+        modules = discover(modules_dir, errors=registry_errors)
+        config = ConfigStore(data_dir / "config.json", modules)
+        config.load()
+    except (ConfigError, RegistryError) as exc:
+        log.error("cannot start: %s", exc)
+        return EXIT_CONFIG
     settings = config.snapshot()
     host = args.host or settings["server"]["host"]
     port = args.port if args.port is not None else settings["server"]["port"]

@@ -13,6 +13,7 @@ import logging
 import sys
 from pathlib import Path
 
+from .config import ConfigError, validate_module_defaults
 from .module_api import Module
 
 log = logging.getLogger("gpta.registry")
@@ -20,9 +21,6 @@ log = logging.getLogger("gpta.registry")
 
 class RegistryError(Exception):
     pass
-
-
-REQUIRED_DEFAULTS = {"enabled", "interval_seconds", "limits", "options"}
 
 
 def _load_module(child: Path) -> Module:
@@ -62,16 +60,16 @@ def _load_module(child: Path) -> Module:
         raise RegistryError(f"{module_file}: module name must be non-empty")
     if not isinstance(module.description, str):
         raise RegistryError(f"{module_file}: module description must be a string")
-    if not isinstance(module.defaults, dict) or not REQUIRED_DEFAULTS <= set(
-        module.defaults
-    ):
-        raise RegistryError(
-            f"{module_file}: defaults must contain {sorted(REQUIRED_DEFAULTS)}"
-        )
+    if not isinstance(module.defaults, dict):
+        raise RegistryError(f"{module_file}: defaults must be a dict")
     if not isinstance(module.limits_schema, dict):
         raise RegistryError(f"{module_file}: limits_schema must be a dict")
     if not isinstance(module.options_schema, dict):
         raise RegistryError(f"{module_file}: options_schema must be a dict")
+    try:
+        validate_module_defaults(module)
+    except ConfigError as exc:
+        raise RegistryError(f"{module_file}: {exc}") from exc
     # Freeze a private copy so runtime mutation cannot leak into defaults.
     module.defaults = copy.deepcopy(module.defaults)
     return module

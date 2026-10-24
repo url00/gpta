@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .module_api import Module
 
@@ -77,18 +77,45 @@ def _validate_value(key: str, value: Any, schema: dict[str, Any], where: str) ->
         raise ConfigError(f"unknown schema type for {where}.{key}: {kind!r}")
 
 
+Reject = Callable[[str], None]
+
+
+def _strict(message: str) -> None:
+    raise ConfigError(message)
+
+
 def _module_defaults(module: Module) -> dict[str, Any]:
     raw = copy.deepcopy(module.defaults)
     for key in ("enabled", "interval_seconds", "limits", "options"):
         if key not in raw:
             raise ConfigError(f"module {module.id!r} defaults missing {key!r}")
-    if type(raw["enabled"]) is not bool:
-        raise ConfigError(f"module {module.id!r} default enabled must be bool")
-    if type(raw["interval_seconds"]) is not int:
-        raise ConfigError(f"module {module.id!r} default interval must be int")
     raw["limits"] = dict(raw["limits"])
     raw["options"] = dict(raw["options"])
     return raw
+
+
+def validate_module_defaults(module: Module) -> None:
+    """Check a module's defaults against its own schema.
+
+    Called by the registry so a module with inconsistent defaults is
+    quarantined instead of breaking config loading for every module.
+    """
+    defaults = _module_defaults(module)
+    where = f"module {module.id!r} defaults"
+    if "max_chars" not in module.limits_schema:
+        raise ConfigError(f"module {module.id!r} limits_schema must define max_chars")
+    for section, schema in (
+        ("limits", module.limits_schema),
+        ("options", module.options_schema),
+    ):
+        missing = set(schema) - set(defaults[section])
+        extra = set(defaults[section]) - set(schema)
+        if missing or extra:
+            raise ConfigError(
+                f"{where}: {section} keys must match {section}_schema "
+                f"(missing {sorted(missing)}, unexpected {sorted(extra)})"
+            )
+    _normalise_module(module, defaults, defaults, where)
 
 
 def _validate_interval(value: Any, where: str) -> int:
@@ -99,60 +126,110 @@ def _validate_interval(value: Any, where: str) -> int:
     return value
 
 
+def _normalise_fields(
+    schema: dict[str, dict[str, Any]],
+    raw: Any,
+    defaults: dict[str, Any],
+    where: str,
+    reject: Reject,
+) -> dict[str, Any]:
+    """Validate a limits/options object field by field.
+
+    Missing fields take their default. ``reject`` either raises (API updates)
+    or logs a warning (loading from disk), in which case the offending field
+    falls back to its default.
+    """
+    if not isinstance(raw, dict):
+        reject(f"{where} must be an object")
+        raw = {}
+    unknown = set(raw) - set(schema)
+    if unknown:
+        reject(f"{where} has unknown keys: {', '.join(sorted(unknown))}")
+    result = {}
+    for key, field_schema in schema.items():
+        value = raw.get(key, defaults[key])
+        try:
+            _validate_value(key, value, field_schema, where)
+        except ConfigError as exc:
+            reject(str(exc))
+            value = defaults[key]
+        result[key] = copy.deepcopy(value)
+    return result
+
+
 def _normalise_module(
-    module: Module, raw: Any, defaults: dict[str, Any], where: str
+    module: Module,
+    raw: Any,
+    defaults: dict[str, Any],
+    where: str,
+    reject: Reject = _strict,
 ) -> dict[str, Any]:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        raise ConfigError(f"{where} must be an object")
+        reject(f"{where} must be an object")
+        raw = {}
     unknown = set(raw) - MODULE_KEYS
     if unknown:
-        raise ConfigError(f"{where} has unknown keys: {', '.join(sorted(unknown))}")
+        reject(f"{where} has unknown keys: {', '.join(sorted(unknown))}")
 
     enabled = raw.get("enabled", defaults["enabled"])
     if type(enabled) is not bool:
-        raise ConfigError(f"{where}.enabled must be true or false")
-    interval = _validate_interval(
-        raw.get("interval_seconds", defaults["interval_seconds"]), where
-    )
-
-    limits_raw = raw.get("limits", defaults["limits"])
-    if not isinstance(limits_raw, dict):
-        raise ConfigError(f"{where}.limits must be an object")
-    unknown_limits = set(limits_raw) - set(module.limits_schema)
-    if unknown_limits:
-        raise ConfigError(
-            f"{where}.limits has unknown keys: {', '.join(sorted(unknown_limits))}"
+        reject(f"{where}.enabled must be true or false")
+        enabled = defaults["enabled"]
+    try:
+        interval = _validate_interval(
+            raw.get("interval_seconds", defaults["interval_seconds"]), where
         )
-    limits = {}
-    for key, schema in module.limits_schema.items():
-        if key not in limits_raw:
-            raise ConfigError(f"{where}.limits missing {key!r}")
-        _validate_value(key, limits_raw[key], schema, f"{where}.limits")
-        limits[key] = limits_raw[key]
-
-    options_raw = raw.get("options", defaults["options"])
-    if not isinstance(options_raw, dict):
-        raise ConfigError(f"{where}.options must be an object")
-    unknown_options = set(options_raw) - set(module.options_schema)
-    if unknown_options:
-        raise ConfigError(
-            f"{where}.options has unknown keys: {', '.join(sorted(unknown_options))}"
-        )
-    options = {}
-    for key, schema in module.options_schema.items():
-        if key not in options_raw:
-            raise ConfigError(f"{where}.options missing {key!r}")
-        _validate_value(key, options_raw[key], schema, f"{where}.options")
-        options[key] = options_raw[key]
+    except ConfigError as exc:
+        reject(str(exc))
+        interval = defaults["interval_seconds"]
 
     return {
         "enabled": enabled,
         "interval_seconds": interval,
-        "limits": limits,
-        "options": options,
+        "limits": _normalise_fields(
+            module.limits_schema,
+            raw.get("limits", {}),
+            defaults["limits"],
+            f"{where}.limits",
+            reject,
+        ),
+        "options": _normalise_fields(
+            module.options_schema,
+            raw.get("options", {}),
+            defaults["options"],
+            f"{where}.options",
+            reject,
+        ),
     }
+
+
+def _tolerant_section(
+    normalise: Callable[[Any], dict[str, Any]],
+    defaults: dict[str, Any],
+    raw: Any,
+    where: str,
+    reject: Reject,
+) -> dict[str, Any]:
+    """Apply ``normalise`` to a stored section, keeping only valid keys."""
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        reject(f"{where} must be an object")
+        raw = {}
+    accepted: dict[str, Any] = {}
+    for key, value in raw.items():
+        if key not in defaults:
+            reject(f"{where} has unknown key: {key}")
+            continue
+        try:
+            normalise({**accepted, key: value})
+        except ConfigError as exc:
+            reject(str(exc))
+            continue
+        accepted[key] = value
+    return normalise(accepted)
 
 
 def _normalise_server(raw: Any) -> dict[str, Any]:
@@ -250,6 +327,12 @@ class ConfigStore:
         return self.path.parent
 
     def load(self) -> None:
+        """Load the stored config, repairing what can be repaired.
+
+        Only an unreadable file is fatal. Unknown or invalid settings are
+        logged and replaced by defaults, so changing a module's schema never
+        stops the server from starting.
+        """
         with self._lock:
             existed = self.path.exists()
             raw: Any = {}
@@ -260,28 +343,39 @@ class ConfigStore:
                     raise ConfigError(f"cannot read {self.path}: {exc}") from exc
             if not isinstance(raw, dict):
                 raise ConfigError(f"{self.path} must contain a JSON object")
+
+            def warn(message: str) -> None:
+                self._log.warning("config: %s; using default", message)
+
             unknown_top = set(raw) - {"server", "printer", "modules"}
             if unknown_top:
-                raise ConfigError(
-                    f"config has unknown top-level keys: {', '.join(sorted(unknown_top))}"
-                )
+                warn(f"unknown top-level keys: {', '.join(sorted(unknown_top))}")
             raw_modules = raw.get("modules", {})
             if not isinstance(raw_modules, dict):
-                raise ConfigError("modules must be an object")
+                warn("modules must be an object")
+                raw_modules = {}
             for stale in sorted(set(raw_modules) - set(self._modules)):
                 self._log.warning("ignoring configuration for unknown module %s", stale)
             modules = {}
             for module_id, module in self._modules.items():
-                defaults = _module_defaults(module)
                 modules[module_id] = _normalise_module(
                     module,
                     raw_modules.get(module_id, {}),
-                    defaults,
+                    _module_defaults(module),
                     f"modules.{module_id}",
+                    warn,
                 )
             self._data = {
-                "server": _normalise_server(raw.get("server", {})),
-                "printer": _normalise_printer(raw.get("printer", {})),
+                "server": _tolerant_section(
+                    _normalise_server, DEFAULT_SERVER, raw.get("server"), "server", warn
+                ),
+                "printer": _tolerant_section(
+                    _normalise_printer,
+                    DEFAULT_PRINTER,
+                    raw.get("printer"),
+                    "printer",
+                    warn,
+                ),
                 "modules": modules,
             }
             if not existed:

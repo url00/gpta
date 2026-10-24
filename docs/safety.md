@@ -10,7 +10,7 @@ records what happens when things go wrong.
 | Module fetch hangs | Worker thread exceeds `server.run_timeout_seconds` | Run fails with `timeout after Ns`; `running` cleared; scheduler keeps ticking; a new manual run returns `ok: false` ("still executing"), never a permanent 409 | A stuck thread is abandoned (bounded to one per module); restart only if it never returns |
 | Module raises | Exception from `fetch()` | Run marked failed, error recorded, previous output kept | Next run after backoff |
 | Module returns nothing | `fetch()` returns `[]` | Renders a "No content" block | Next run |
-| Module import/validation fails | Registry validation | Module quarantined, error exposed in `/api/state.registry_errors`, other modules start | Fix the folder and restart |
+| Module import/validation fails | Registry validation, including defaults checked against the module's own schema | Module quarantined, error exposed in `/api/state.registry_errors`, other modules start | Fix the folder and restart |
 | Printer offline | Open/write error, or write deadline | Run still succeeds; `print_error` recorded; consecutive failures counted | Fix device; failures reset on success |
 | Printer busy | Single writer thread | Writes are serialized, never interleaved | Automatic |
 | Printer jammed | `write_timeout_seconds` deadline | Caller gets `PrinterError`; device thread may remain blocked | Restart if the kernel never returns |
@@ -18,7 +18,8 @@ records what happens when things go wrong.
 | Repeated print failures | `failure_threshold` consecutive failures | Printer auto-disabled, error logged, `disabled_reason` exposed | Re-enable in the UI/API |
 | Repeated module failures | Non-zero `consecutive_failures` | Effective interval doubles, capped at 7 days | One success resets it |
 | Wall-clock jump | Scheduling uses `time.monotonic()` | No burst or stall; wall clock is display-only | Automatic |
-| Config corrupt | `ConfigStore.load()` | Startup fails with a clear `ConfigError` | Fix/remove `data/config.json` |
+| Stored setting unknown or invalid (e.g. after a module schema change) | `ConfigStore.load()` | Warning logged; the setting falls back to its default; other settings are kept | Automatic; the file is rewritten on the next save |
+| Config file unreadable (not JSON / not an object) | `ConfigStore.load()` | Startup exits with status 78 and a one-line error; systemd does not restart on 78 | Fix/remove `data/config.json` |
 | Unknown module/output | Route lookup | `404` | — |
 | Concurrent manual run | Runtime flag | `409` | Wait for the run or timeout |
 | Timed-out worker still alive | Abandoned-thread check | New run returns `ok: false` with a clear error (not `409`) | Recovers when the worker returns; restart if it never does |

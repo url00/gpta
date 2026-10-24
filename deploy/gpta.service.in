@@ -12,6 +12,8 @@ Environment=GPTA_DATA_DIR=@DATA_DIR@
 ExecStart=@EXEC@
 Restart=on-failure
 RestartSec=3
+# 78 = configuration error; restarting cannot fix it.
+RestartPreventExitStatus=78
 NoNewPrivileges=true
 @SUPPLEMENTARY_GROUPS@
 

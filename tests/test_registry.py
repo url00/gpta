@@ -55,6 +55,19 @@ class RegistryTests(unittest.TestCase):
         self.assertIn("broken", errors)
         self.assertIn("kaboom", errors["broken"])
 
+    def test_bad_defaults_quarantined(self):
+        source = VALID_MODULE.format(id="bad").replace(
+            "'max_chars': 100", "'max_chars': 5"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "bad"
+            folder.mkdir()
+            (folder / "module.py").write_text(source)
+            errors: dict[str, str] = {}
+            modules = discover(Path(tmp), errors=errors)
+        self.assertEqual(modules, {})
+        self.assertIn("max_chars", errors["bad"])
+
     def test_missing_directory_still_raises(self):
         with self.assertRaises(RegistryError):
             discover(Path("/nonexistent/gpta-modules"))
