@@ -16,7 +16,12 @@ Create a class with:
 
 - `id`, `name`, `description` strings; `id` must equal the folder name.
 - `defaults` containing `enabled`, `interval_seconds`, `limits`, `options`.
-- `limits_schema` / `options_schema` describing editable fields.
+- `options_schema` describing editable options, and `limits_schema` for any
+  limits beyond the core `max_chars` (every module has `max_chars`; the host
+  truncates the receipt to it). Declare only limits the module applies, e.g.
+  `limits_schema = {"max_items": MAX_ITEMS_LIMIT}`.
+- Defaults for every limit and option. They are checked against the schemas
+  at startup; a mismatch quarantines the module.
 - `fetch(ctx) -> list[Block]` returning promptly.
 
 ```python

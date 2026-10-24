@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from gpta import DEFAULT_MODULES_DIR
-from gpta.registry import RegistryError, discover
+from gpta.registry import RegistryError, describe, discover
 
 VALID_MODULE = (
     "from gpta.module_api import Module, Block\n"
@@ -12,7 +12,7 @@ VALID_MODULE = (
     "    name = 'Good'\n"
     "    description = ''\n"
     "    defaults = {{'enabled': False, 'interval_seconds': 60, "
-    "'limits': {{'max_items': 1, 'max_chars': 100}}, 'options': {{}}}}\n"
+    "'limits': {{'max_chars': 100}}, 'options': {{}}}}\n"
     "    def fetch(self, ctx):\n"
     "        return [Block('x', ('y',))]\n"
 )
@@ -27,6 +27,22 @@ class RegistryTests(unittest.TestCase):
             ["affirmations", "google_tasks", "gutenberg", "hackernews"],
         )
         self.assertEqual(errors, {})
+
+    def test_modules_expose_only_limits_they_use(self):
+        modules = discover(DEFAULT_MODULES_DIR)
+        limits = {
+            module_id: sorted(describe(module)["limits_schema"])
+            for module_id, module in modules.items()
+        }
+        self.assertEqual(
+            limits,
+            {
+                "affirmations": ["max_chars"],
+                "google_tasks": ["max_chars", "max_items"],
+                "gutenberg": ["max_chars"],
+                "hackernews": ["max_chars", "max_items"],
+            },
+        )
 
     def test_folder_id_mismatch_quarantined(self):
         with tempfile.TemporaryDirectory() as tmp:

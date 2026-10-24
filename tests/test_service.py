@@ -20,7 +20,7 @@ class FakeModule(Module):
     defaults = {
         "enabled": False,
         "interval_seconds": 60,
-        "limits": {"max_items": 2, "max_chars": 500},
+        "limits": {"max_chars": 500},
         "options": {"text": "hello"},
     }
     options_schema = {"text": {"type": "str", "label": "Text", "max_length": 50}}
@@ -43,7 +43,7 @@ class FlakyModule(FakeModule):
     defaults = {
         "enabled": False,
         "interval_seconds": 5,
-        "limits": {"max_items": 2, "max_chars": 500},
+        "limits": {"max_chars": 500},
         "options": {"text": "hello"},
     }
 

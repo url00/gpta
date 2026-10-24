@@ -48,7 +48,6 @@ class ModuleRuntime:
     last_error: str | None = None
     last_duration_ms: int | None = None
     run_count: int = 0
-    items: int = 0
     running: bool = False
     print_error: str | None = None
     consecutive_failures: int = 0
@@ -178,7 +177,6 @@ class ModuleRunner:
                 runtime = self._runtime[module_id]
                 runtime.last_ok = True
                 runtime.last_error = None
-                runtime.items = len(blocks)
                 runtime.print_error = None
                 runtime.consecutive_failures = 0
             module_log(f"fetched {len(blocks)} block(s)", "info", module_id)
@@ -305,7 +303,6 @@ class ModuleRunner:
                 "last_error": runtime.last_error,
                 "last_duration_ms": runtime.last_duration_ms,
                 "run_count": runtime.run_count,
-                "items": runtime.items,
                 "running": runtime.running,
                 "print_error": runtime.print_error,
                 "next_due_seconds": next_due,

@@ -131,13 +131,14 @@ def render_total(
 
 def to_escpos(
     lines: Sequence[str],
-    encoding: str = "cp437",
     feed_lines: int = 3,
     cut: bool = True,
 ) -> bytes:
     safe = [ascii_safe(line) for line in lines]
     body = "\n".join(safe)
-    data = b"\x1b@" + body.encode(encoding, errors="replace")
+    # ascii_safe() already reduced the text to printable ASCII, which every
+    # ESC/POS code page renders identically.
+    data = b"\x1b@" + body.encode("ascii", errors="replace")
     data += b"\n" * max(0, int(feed_lines))
     if cut:
         data += b"\x1dV\x00"

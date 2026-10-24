@@ -24,7 +24,6 @@ class PrinterError(Exception):
 def _escpos_bytes(lines: Sequence[str], config: dict[str, Any]) -> bytes:
     return to_escpos(
         lines,
-        encoding=config.get("encoding", "cp437"),
         feed_lines=int(config.get("feed_lines", 3)),
         cut=bool(config.get("cut", True)),
     )

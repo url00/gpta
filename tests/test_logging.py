@@ -18,7 +18,7 @@ class EmitModule(Module):
     defaults = {
         "enabled": False,
         "interval_seconds": 60,
-        "limits": {"max_items": 1, "max_chars": 500},
+        "limits": {"max_chars": 500},
         "options": {},
     }
 

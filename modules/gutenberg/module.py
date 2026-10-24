@@ -136,7 +136,7 @@ class GutenbergModule(Module):
     defaults = {
         "enabled": False,
         "interval_seconds": 86400,
-        "limits": {"max_items": 1, "max_chars": 1800},
+        "limits": {"max_chars": 1800},
         "options": {"book_id": None, "language": "en", "cache": True},
     }
     options_schema = {

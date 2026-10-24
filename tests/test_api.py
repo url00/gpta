@@ -86,7 +86,7 @@ class ApiTests(unittest.TestCase):
         status, body, _ = self.request(
             "PATCH",
             "/api/modules/affirmations",
-            {"enabled": True, "limits": {"max_items": 1, "max_chars": 500}},
+            {"enabled": True, "limits": {"max_chars": 500}},
         )
         self.assertEqual(status, 200, body)
         self.assertTrue(json.loads(body)["module"]["enabled"])

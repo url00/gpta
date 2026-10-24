@@ -16,7 +16,7 @@ class AffirmationsModule(Module):
     defaults = {
         "enabled": False,
         "interval_seconds": 86400,
-        "limits": {"max_items": 1, "max_chars": 500},
+        "limits": {"max_chars": 500},
         "options": {"include_date": True},
     }
     options_schema = {

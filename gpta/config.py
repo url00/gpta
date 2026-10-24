@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from .module_api import Module
+from .module_api import CORE_LIMITS_SCHEMA, Module, limits_schema
 
 DEFAULT_SERVER = {
     "host": "127.0.0.1",
@@ -25,7 +25,6 @@ DEFAULT_PRINTER = {
     "auto_print": True,
     "device": "/dev/usb/lp0",
     "width": 32,
-    "encoding": "cp437",
     "feed_lines": 3,
     "cut": True,
     "write_timeout_seconds": 10,
@@ -33,7 +32,6 @@ DEFAULT_PRINTER = {
     "max_prints_per_hour": 60,
     "failure_threshold": 3,
 }
-SUPPORTED_ENCODINGS = {"cp437", "ascii", "latin-1"}
 
 MODULE_KEYS = {"enabled", "interval_seconds", "limits", "options"}
 PRINTER_KEYS = set(DEFAULT_PRINTER)
@@ -102,10 +100,14 @@ def validate_module_defaults(module: Module) -> None:
     """
     defaults = _module_defaults(module)
     where = f"module {module.id!r} defaults"
-    if "max_chars" not in module.limits_schema:
-        raise ConfigError(f"module {module.id!r} limits_schema must define max_chars")
+    redefined = set(module.limits_schema) & set(CORE_LIMITS_SCHEMA)
+    if redefined:
+        raise ConfigError(
+            f"module {module.id!r} limits_schema redefines core limits: "
+            f"{', '.join(sorted(redefined))}"
+        )
     for section, schema in (
-        ("limits", module.limits_schema),
+        ("limits", limits_schema(module)),
         ("options", module.options_schema),
     ):
         missing = set(schema) - set(defaults[section])
@@ -189,7 +191,7 @@ def _normalise_module(
         "enabled": enabled,
         "interval_seconds": interval,
         "limits": _normalise_fields(
-            module.limits_schema,
+            limits_schema(module),
             raw.get("limits", {}),
             defaults["limits"],
             f"{where}.limits",
@@ -282,10 +284,6 @@ def _normalise_printer(raw: Any) -> dict[str, Any]:
         raise ConfigError("printer.device must be a normalised path under /dev/")
     if type(result["width"]) is not int or result["width"] not in (32, 48):
         raise ConfigError("printer.width must be 32 or 48")
-    if result["encoding"] not in SUPPORTED_ENCODINGS:
-        raise ConfigError(
-            f"printer.encoding must be one of {sorted(SUPPORTED_ENCODINGS)}"
-        )
     if type(result["feed_lines"]) is not int or not 0 <= result["feed_lines"] <= 10:
         raise ConfigError("printer.feed_lines must be between 0 and 10")
     if type(result["write_timeout_seconds"]) is not int or not 1 <= result[

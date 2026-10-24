@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from gpta.config import ConfigError, ConfigStore, validate_module_defaults
-from gpta.module_api import Block, Module
+from gpta.module_api import MAX_ITEMS_LIMIT, Block, Module
 
 
 class EchoModule(Module):
@@ -17,6 +17,7 @@ class EchoModule(Module):
         "limits": {"max_items": 2, "max_chars": 500},
         "options": {"text": "hello"},
     }
+    limits_schema = {"max_items": MAX_ITEMS_LIMIT}
     options_schema = {"text": {"type": "str", "label": "Text", "max_length": 50}}
 
     def fetch(self, ctx):
@@ -175,11 +176,16 @@ class DefaultsValidationTests(unittest.TestCase):
         class BadValue(EchoModule):
             defaults = {**EchoModule.defaults, "options": {"text": 5}}
 
-        class NoMaxChars(EchoModule):
-            limits_schema = {"max_items": EchoModule.limits_schema["max_items"]}
-            defaults = {**EchoModule.defaults, "limits": {"max_items": 1}}
+        class RedefinesCore(EchoModule):
+            limits_schema = {
+                "max_items": MAX_ITEMS_LIMIT,
+                "max_chars": {"type": "int", "label": "x"},
+            }
 
-        for cls in (MissingOption, BadValue, NoMaxChars):
+        class ExtraLimit(EchoModule):
+            limits_schema = {}
+
+        for cls in (MissingOption, BadValue, RedefinesCore, ExtraLimit):
             with self.subTest(cls=cls.__name__):
                 with self.assertRaises(ConfigError):
                     validate_module_defaults(cls())

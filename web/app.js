@@ -240,7 +240,6 @@ function updateCard(entry, module) {
   const parts = [];
   if (runtime.last_run_at) parts.push(`last ${runtime.last_run_at}`);
   parts.push(`${runtime.run_count} run${runtime.run_count === 1 ? "" : "s"}`);
-  parts.push(`${runtime.items} item${runtime.items === 1 ? "" : "s"}`);
   if (runtime.next_due_seconds !== null && runtime.next_due_seconds !== undefined) {
     parts.push(`next in ${runtime.next_due_seconds}s`);
   }

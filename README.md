@@ -72,9 +72,9 @@ All modules start disabled. Enable them in the UI or via the API. Limits:
 
 | Module | Default interval | Limit | Options |
 |---|---|---|---|
-| `affirmations` | 86400s | 1 item, 500 chars | include date |
+| `affirmations` | 86400s | 500 chars | include date |
 | `hackernews` | 604800s | 5 items, 1500 chars | window days, min score, scan limit |
-| `gutenberg` | 86400s | 1 item, 1800 chars | book id, language, cache |
+| `gutenberg` | 86400s | 1800 chars | book id, language, cache |
 | `google_tasks` | 3600s | 15 items, 2000 chars | credentials file, list id, completed |
 
 - **Daily Affirmation** selects a deterministic affirmation from
@@ -102,7 +102,8 @@ that file; credentials are never returned by the HTTP API.
 ## Printer
 
 The printer transport writes ESC/POS bytes to a character device. The default
-is `/dev/usb/lp0`, width 32 columns, cp437 encoding, with a cut command. Change
+is `/dev/usb/lp0`, width 32 columns, with a cut command. Text is reduced to
+printable ASCII, which every ESC/POS code page prints the same way. Change
 the device, width (32/48), auto-print, and enabled state in the console.
 
 The simulator shows the exact ASCII receipt rendered for the printer, both per

@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from .config import ConfigError, validate_module_defaults
-from .module_api import Module
+from .module_api import Module, limits_schema
 
 log = logging.getLogger("gpta.registry")
 
@@ -120,7 +120,7 @@ def describe(module: Module) -> dict:
         "id": module.id,
         "name": module.name,
         "description": module.description,
-        "limits_schema": copy.deepcopy(module.limits_schema),
+        "limits_schema": copy.deepcopy(limits_schema(module)),
         "options_schema": copy.deepcopy(module.options_schema),
         "default_interval_seconds": module.defaults["interval_seconds"],
     }

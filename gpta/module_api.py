@@ -155,6 +155,25 @@ class ModuleContext:
         self.log(message, level)
 
 
+#: Limits every module has. The host truncates each receipt to ``max_chars``.
+CORE_LIMITS_SCHEMA: dict[str, dict[str, Any]] = {
+    "max_chars": {"type": "int", "label": "Max characters", "min": 100, "max": 10000},
+}
+
+#: A ready-made schema for the common "how many items to print" limit.
+MAX_ITEMS_LIMIT: dict[str, Any] = {
+    "type": "int",
+    "label": "Max items",
+    "min": 1,
+    "max": 100,
+}
+
+
+def limits_schema(module: "Module") -> dict[str, dict[str, Any]]:
+    """The full limits schema for ``module``: core limits plus its own."""
+    return {**CORE_LIMITS_SCHEMA, **module.limits_schema}
+
+
 class Module:
     """Base class for all data sources/API gateway modules."""
 
@@ -165,19 +184,14 @@ class Module:
     defaults: dict[str, Any] = {
         "enabled": False,
         "interval_seconds": 3600,
-        "limits": {"max_items": 5, "max_chars": 1000},
+        "limits": {"max_chars": 1000},
         "options": {},
     }
 
-    limits_schema: dict[str, dict[str, Any]] = {
-        "max_items": {"type": "int", "label": "Max items", "min": 1, "max": 100},
-        "max_chars": {
-            "type": "int",
-            "label": "Max characters",
-            "min": 100,
-            "max": 10000,
-        },
-    }
+    #: Limits beyond the core ``max_chars`` (see :data:`CORE_LIMITS_SCHEMA`).
+    #: Declare only limits the module actually applies, e.g.
+    #: ``{"max_items": MAX_ITEMS_LIMIT}``.
+    limits_schema: dict[str, dict[str, Any]] = {}
 
     options_schema: dict[str, dict[str, Any]] = {}
 

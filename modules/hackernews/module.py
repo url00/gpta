@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from gpta.module_api import Block, FetchError, Module, ModuleContext
+from gpta.module_api import MAX_ITEMS_LIMIT, Block, FetchError, Module, ModuleContext
 
 TOP_STORIES = "https://hacker-news.firebaseio.com/v0/topstories.json"
 ITEM = "https://hacker-news.firebaseio.com/v0/item/{}.json"
@@ -21,6 +21,7 @@ class HackerNewsModule(Module):
         "limits": {"max_items": 5, "max_chars": 1500},
         "options": {"window_days": 7, "min_score": 0, "scan_limit": 30},
     }
+    limits_schema = {"max_items": MAX_ITEMS_LIMIT}
     options_schema = {
         "window_days": {
             "type": "int",

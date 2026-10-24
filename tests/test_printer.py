@@ -25,7 +25,7 @@ class FakeModule(Module):
     defaults = {
         "enabled": False,
         "interval_seconds": 60,
-        "limits": {"max_items": 1, "max_chars": 200},
+        "limits": {"max_chars": 200},
         "options": {},
     }
 

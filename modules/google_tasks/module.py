@@ -6,7 +6,7 @@ import json
 import urllib.parse
 from pathlib import Path
 
-from gpta.module_api import Block, FetchError, Module, ModuleContext
+from gpta.module_api import MAX_ITEMS_LIMIT, Block, FetchError, Module, ModuleContext
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 LISTS_URL = "https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=100"
@@ -92,6 +92,7 @@ class GoogleTasksModule(Module):
             "show_completed": False,
         },
     }
+    limits_schema = {"max_items": MAX_ITEMS_LIMIT}
     options_schema = {
         "credentials_file": {
             "type": "str",
