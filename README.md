@@ -60,7 +60,8 @@ background process and writes `data/server.pid`. `install-systemd.sh` registers
 the service system-wide at `/etc/systemd/system/gpta.service`, enables it in
 `multi-user.target`, and escalates with `sudo` when needed. Use
 `./scripts/install-systemd.sh --dry-run` to print the unit without changing the
-system.
+system. Re-running the installer rewrites the unit if the template or
+settings changed and restarts the service; otherwise it does nothing.
 
 The unit runs as `$SUDO_USER` when installed through `sudo`, otherwise as
 `${GPTA_RUN_USER:-$USER}`. It adds `SupplementaryGroups=lp` when that group

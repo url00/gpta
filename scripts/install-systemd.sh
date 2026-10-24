@@ -21,12 +21,23 @@ done
 
 RUN_USER="${GPTA_RUN_USER:-${SUDO_USER:-$(id -un)}}"
 
+# Escape a value for the replacement side of a sed s|...|...| expression.
+sed_escape() {
+  printf '%s' "$1" | sed -e 's/[\\|&]/\\&/g'
+}
+
 render_unit() {
   local supplementary="# SupplementaryGroups=lp (group absent)"
   if getent group lp >/dev/null 2>&1; then
     supplementary="SupplementaryGroups=lp"
   fi
-  sed     -e "s|@RUN_USER@|${RUN_USER}|g"     -e "s|@ROOT@|${ROOT}|g"     -e "s|@DATA_DIR@|${DATA_DIR}|g"     -e "s|@EXEC@|${EXEC}|g"     -e "s|@SUPPLEMENTARY_GROUPS@|${supplementary}|g"     "$ROOT/deploy/gpta.service.in"
+  sed \
+    -e "s|@RUN_USER@|$(sed_escape "$RUN_USER")|g" \
+    -e "s|@ROOT@|$(sed_escape "$ROOT")|g" \
+    -e "s|@DATA_DIR@|$(sed_escape "$DATA_DIR")|g" \
+    -e "s|@EXEC@|$(sed_escape "$EXEC")|g" \
+    -e "s|@SUPPLEMENTARY_GROUPS@|$(sed_escape "$supplementary")|g" \
+    "$ROOT/deploy/gpta.service.in"
 }
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -35,7 +46,10 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 if [ "$(id -u)" -ne 0 ]; then
-  exec sudo --preserve-env=GPTA_DATA_DIR,GPTA_EXEC,GPTA_RUN_USER,GPTA_UNIT_NAME,GPTA_PYTHON,GPTA_PORT,GPTA_HOST     env "GPTA_RUN_USER=${RUN_USER}" "$ROOT/scripts/install-systemd.sh" "$@"
+  exec sudo \
+    --preserve-env=GPTA_DATA_DIR,GPTA_EXEC,GPTA_RUN_USER,GPTA_UNIT_NAME,GPTA_PYTHON \
+    env "GPTA_RUN_USER=${RUN_USER}" \
+    "$ROOT/scripts/install-systemd.sh" "$@"
 fi
 
 if ! id -u "$RUN_USER" >/dev/null 2>&1; then
@@ -43,25 +57,32 @@ if ! id -u "$RUN_USER" >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ -f "$UNIT_PATH" ]; then
-  echo "already registered at $UNIT_PATH"
-  systemctl daemon-reload
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+render_unit >"$tmp"
+
+if [ -f "$UNIT_PATH" ] && cmp -s "$tmp" "$UNIT_PATH"; then
+  echo "$UNIT_PATH is up to date"
   systemctl enable --now "$UNIT_NAME"
   exit 0
 fi
 
-# Remove a manually started instance so the unit can bind the same port.
+# Stop a manually started instance so the unit can bind the same port.
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   kill "$(cat "$PID_FILE")" 2>/dev/null || true
   rm -f "$PID_FILE"
 fi
 
-tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
-render_unit >"$tmp"
+if [ -f "$UNIT_PATH" ]; then
+  action="updated"
+else
+  action="registered"
+fi
 install -m 0644 "$tmp" "$UNIT_PATH"
 install -d -m 0755 -o "$RUN_USER" -g "$(id -gn "$RUN_USER")" "$DATA_DIR"
 systemctl daemon-reload
-systemctl enable --now "$UNIT_NAME"
-echo "registered $UNIT_PATH and started $UNIT_NAME"
+systemctl enable "$UNIT_NAME"
+# restart (not start) so an updated unit takes effect on a running service.
+systemctl restart "$UNIT_NAME"
+echo "$action $UNIT_PATH and (re)started $UNIT_NAME"
 systemctl status --no-pager "$UNIT_NAME" || true
