@@ -98,6 +98,7 @@ class ModuleRunner:
         self.fetch_timeout = float(fetch_timeout)
         self.clock = clock
         self.monotonic = monotonic
+        self.cache = Cache(config.data_dir / "cache")
         self._lock = threading.RLock()
         self._runtime = {module_id: ModuleRuntime() for module_id in registry}
         self._stuck: dict[str, threading.Thread] = {}
@@ -159,7 +160,7 @@ class ModuleRunner:
                 data_dir=self.config.data_dir,
                 now=now,
                 http=self.http,
-                cache=Cache(self.config.data_dir / "cache"),
+                cache=self.cache,
                 log=self._make_emitter(module_id),
             )
             blocks = self._fetch_with_timeout(module, ctx)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -33,11 +34,13 @@ class Cache:
     Entries are addressed by a relative key such as ``"gutenberg/11.txt"``.
     Writes are atomic; reads touch the file so the size-based eviction pass
     approximates LRU. Expired entries and oversized caches are pruned on every
-    write.
+    write. One instance is shared by all runs so its lock serialises eviction.
     """
 
     DEFAULT_MAX_BYTES = 50 * 1024 * 1024
     DEFAULT_MAX_AGE_SECONDS = 30 * 24 * 3600
+    # Temp files older than this are leftovers from a crash, not live writes.
+    STALE_TMP_SECONDS = 3600
 
     def __init__(
         self,
@@ -63,7 +66,7 @@ class Cache:
         path = self.path(key)
         try:
             text = path.read_text(encoding=encoding)
-        except (FileNotFoundError, OSError):
+        except (OSError, UnicodeDecodeError):
             return None
         try:
             os.utime(path)
@@ -74,9 +77,14 @@ class Cache:
     def write_text(self, key: str, text: str, encoding: str = "utf-8") -> None:
         path = self.path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
+        # A unique temp name, so concurrent writes of one key cannot collide.
+        fd, tmp_name = tempfile.mkstemp(
+            dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+        )
+        tmp = Path(tmp_name)
         try:
-            tmp.write_text(text, encoding=encoding)
+            with os.fdopen(fd, "w", encoding=encoding) as handle:
+                handle.write(text)
             tmp.replace(path)
         except OSError:
             try:
@@ -97,15 +105,16 @@ class Cache:
             for path in self.root.rglob("*"):
                 if not path.is_file():
                     continue
-                if path.name.endswith(".tmp"):
-                    try:
-                        path.unlink()
-                    except OSError:
-                        pass
-                    continue
                 try:
                     stat = path.stat()
                 except OSError:
+                    continue
+                if path.name.endswith(".tmp"):
+                    if now - stat.st_mtime > self.STALE_TMP_SECONDS:
+                        try:
+                            path.unlink()
+                        except OSError:
+                            pass
                     continue
                 if self.max_age_seconds and now - stat.st_mtime > self.max_age_seconds:
                     try:

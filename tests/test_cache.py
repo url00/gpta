@@ -37,6 +37,26 @@ class CacheTests(unittest.TestCase):
             self.assertFalse(cache.path("old.txt").exists())
             self.assertTrue(cache.path("new.txt").exists())
 
+    def test_live_temp_files_survive_eviction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Cache(Path(tmp))
+            live = Path(tmp) / ".a.txt.123.tmp"
+            stale = Path(tmp) / ".b.txt.456.tmp"
+            live.write_text("in progress")
+            stale.write_text("crashed")
+            old = time.time() - 2 * Cache.STALE_TMP_SECONDS
+            os.utime(stale, (old, old))
+            cache.write_text("c.txt", "x")
+            self.assertTrue(live.exists())
+            self.assertFalse(stale.exists())
+            self.assertEqual(sorted(p.name for p in Path(tmp).glob("*.txt")), ["c.txt"])
+
+    def test_undecodable_entry_reads_as_miss(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Cache(Path(tmp))
+            cache.path("bad.txt").write_bytes(b"\xff\xfe\xfa")
+            self.assertIsNone(cache.read_text("bad.txt"))
+
     def test_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache = Cache(Path(tmp))
