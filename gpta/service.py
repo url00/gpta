@@ -9,24 +9,43 @@ locks only around their own state and never call out while holding them.
 
 from __future__ import annotations
 
+import base64
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .blocks import SIZES, Text
 from .config import PAPERS, ConfigStore
-from .errors import NotFound
+from .errors import InvalidRequest, NotFound
 from .http import HttpClient
 from .logbus import LogBus
 from .module_api import Module
 from .outputs import OutputStore
 from .printing import Printer, PrinterWriter
 from .registry import describe
-from .renderer import render_image, render_text, test_receipt, to_png
+from .renderer import Receipt, render_image, render_text, test_receipt, to_png
 from .runner import ModuleRunner, module_log
 from .scheduler import Scheduler
 from .state import StateStore
+
+#: Longest text the Instant tab may print in one job.
+INSTANT_MAX_CHARS = 5000
+
+
+def instant_receipt(body: Any) -> Receipt:
+    """A one-off receipt of pasted ``text`` at ``size``: no header or footer."""
+    if not isinstance(body, dict):
+        raise InvalidRequest("body must be an object")
+    text, size = body.get("text"), body.get("size", "body")
+    if not isinstance(text, str) or not text.strip():
+        raise InvalidRequest("text must be a non-empty string")
+    if len(text) > INSTANT_MAX_CHARS:
+        raise InvalidRequest(f"text is longer than {INSTANT_MAX_CHARS} characters")
+    if size not in SIZES:
+        raise InvalidRequest(f"size must be one of {', '.join(SIZES)}")
+    return Receipt(title="", elements=(Text(text.strip("\n"), size=size),), stamp="")
 
 
 class Service:
@@ -120,6 +139,21 @@ class Service:
             render_image(receipt, paper["width_px"]), "test", manual=True
         )
         return {"ok": True, "lines": render_text(receipt, paper["columns"])}
+
+    def instant_preview(self, body: Any) -> dict[str, Any]:
+        """The image an instant print would produce, as a PNG data URL."""
+        image = render_image(
+            instant_receipt(body), _paper(self.config.snapshot())["width_px"]
+        )
+        data = base64.b64encode(to_png(image)).decode("ascii")
+        return {"png": f"data:image/png;base64,{data}", "height_px": image.height}
+
+    def instant_print(self, body: Any) -> dict[str, Any]:
+        receipt = instant_receipt(body)
+        width_px = _paper(self.config.snapshot())["width_px"]
+        self.printer.submit(render_image(receipt, width_px), "instant", manual=True)
+        module_log(f"instant print: {len(receipt.elements[0].text)} characters")
+        return {"ok": True}
 
     # -- snapshots -----------------------------------------------------
     def snapshot(self) -> dict[str, Any]:

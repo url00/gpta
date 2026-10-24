@@ -307,6 +307,36 @@ class ApiTests(unittest.TestCase):
         status, _, _ = self.request("POST", "/api/printer/test", {})
         self.assertEqual(status, 409)
 
+    def test_instant_preview_and_print(self):
+        status, body, _ = self.request(
+            "POST", "/api/instant/preview", {"text": "héllo — wörld", "size": "huge"}
+        )
+        self.assertEqual(status, 200)
+        preview = json.loads(body)
+        self.assertTrue(preview["png"].startswith("data:image/png;base64,"))
+        small = json.loads(
+            self.request(
+                "POST",
+                "/api/instant/preview",
+                {"text": "héllo — wörld", "size": "small"},
+            )[1]
+        )
+        self.assertGreater(preview["height_px"], small["height_px"])
+        for bad in (
+            {},
+            {"text": "  \n "},
+            {"text": "x", "size": "giant"},
+            {"text": "x" * 5001},
+            {"text": 5},
+        ):
+            status, _, _ = self.request("POST", "/api/instant/preview", bad)
+            self.assertEqual(status, 400, bad)
+        # The printer is disabled in these tests.
+        status, _, _ = self.request("POST", "/api/instant/print", {"text": "hi"})
+        self.assertEqual(status, 409)
+        status, _, _ = self.request("POST", "/api/instant/print", {"text": ""})
+        self.assertEqual(status, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,7 @@ from typing import Any
 
 from . import __version__
 from .config import ConfigError
-from .errors import AlreadyRunning, NotFound
+from .errors import AlreadyRunning, InvalidRequest, NotFound
 from .printing import PrinterDisabled, PrinterError, PrinterRateLimited
 from .service import Service
 
@@ -60,6 +60,8 @@ ROUTES: list[tuple[str, re.Pattern[str], str]] = [
         ("POST", r"/api/modules/(?P<module_id>[^/]+)/run", "run_module"),
         ("PATCH", r"/api/printer", "patch_printer"),
         ("POST", r"/api/printer/test", "test_printer"),
+        ("POST", r"/api/instant/preview", "instant_preview"),
+        ("POST", r"/api/instant/print", "instant_print"),
     )
 ]
 
@@ -180,6 +182,12 @@ class Handler(BaseHTTPRequestHandler):
     def _h_test_printer(self) -> None:
         self._json(200, self.server.service.test_printer())
 
+    def _h_instant_preview(self) -> None:
+        self._json(200, self.server.service.instant_preview(self._body_json))
+
+    def _h_instant_print(self) -> None:
+        self._json(200, self.server.service.instant_print(self._body_json))
+
     # -- dispatch ------------------------------------------------------
     def _dispatch(self) -> None:
         self._body: bytes | None = None
@@ -208,7 +216,7 @@ class Handler(BaseHTTPRequestHandler):
                 {"error": "method not allowed"},
                 {"Allow": ", ".join(sorted(set(exc.allowed)))},
             )
-        except (ValidationError, ConfigError) as exc:
+        except (ValidationError, InvalidRequest, ConfigError) as exc:
             self._json(400, {"error": str(exc)})
         except AlreadyRunning as exc:
             self._json(409, {"error": str(exc)})

@@ -15,16 +15,49 @@
     <!-- To add a tab: add a button here and a matching section below.
          data-tab is the URL hash; ids follow tab-<name> / panel-<name>. -->
     <nav class="tabs" role="tablist" aria-label="Console sections">
-      <button type="button" role="tab" id="tab-about" data-tab="about" aria-controls="panel-about">About</button>
+      <button type="button" role="tab" id="tab-instant" data-tab="instant" aria-controls="panel-instant">Instant</button>
       <button type="button" role="tab" id="tab-modules" data-tab="modules" aria-controls="panel-modules">Modules</button>
       <button type="button" role="tab" id="tab-printer" data-tab="printer" aria-controls="panel-printer">Printer</button>
+      <button type="button" role="tab" id="tab-about" data-tab="about" aria-controls="panel-about">About</button>
     </nav>
   </header>
 
   <div id="banner" class="banner hidden" role="alert"></div>
 
   <main>
-    <section id="panel-about" class="panel about" role="tabpanel" aria-labelledby="tab-about" tabindex="0">
+    <section id="panel-instant" class="panel instant-panel" role="tabpanel" aria-labelledby="tab-instant" tabindex="0">
+      <div class="instant-editor">
+        <h2>Instant print</h2>
+        <p class="desc">Paste or type anything. It wraps to the paper width and prints once.</p>
+        <label class="field" for="instant-text">Text</label>
+        <textarea id="instant-text" rows="10" maxlength="5000" spellcheck="true" placeholder="Paste text here"></textarea>
+        <div class="instant-controls">
+          <label class="field">Size
+            <select id="instant-size">
+              <option value="small">Small</option>
+              <option value="body" selected>Normal</option>
+              <option value="large">Large</option>
+              <option value="huge">Huge</option>
+            </select>
+          </label>
+          <span id="instant-count" class="meta">0 / 5000</span>
+        </div>
+        <div class="actions">
+          <button id="instant-print" type="button">Print</button>
+          <button id="instant-clear" type="button" class="secondary">Clear</button>
+        </div>
+        <p id="instant-note" class="card-note"></p>
+      </div>
+      <aside class="simulator" aria-label="Instant print preview">
+        <div class="sim-head"><h2>Preview</h2></div>
+        <div class="paper">
+          <img id="instant-img" alt="Print preview" hidden>
+          <p id="instant-empty" class="receipt-empty">Preview appears here.</p>
+        </div>
+      </aside>
+    </section>
+
+    <section id="panel-about" class="panel about" role="tabpanel" aria-labelledby="tab-about" tabindex="0" hidden>
       <h2>About</h2>
       <p>
         GPTA is a small receipt printer appliance. A background server gathers
@@ -32,6 +65,8 @@
         prints them on a thermal printer. This page is its local console.
       </p>
       <p>
+        Use the <a href="#instant" data-goto="instant">Instant</a> tab to
+        print pasted text once, for example from a phone.
         Modules start disabled. Enable and configure them on the
         <a href="#modules" data-goto="modules">Modules</a> tab, and set up the
         printer on the <a href="#printer" data-goto="printer">Printer</a> tab.

@@ -88,6 +88,16 @@ class PrinterSafetyTests(unittest.TestCase):
         self.assertEqual(max_active, 1)
         self.assertEqual(calls, 2)
 
+    def test_instant_print_skips_spacing_and_needs_no_auto_print(self):
+        self.enable_printer(min_print_spacing_seconds=30, auto_print=False)
+        with patch("gpta.printing.transport.send_to_device") as send:
+            self.service.test_printer()
+            self.service.instant_print({"text": "milk\neggs", "size": "large"})
+        self.assertEqual(send.call_count, 2)
+        image = send.call_args.args[0]
+        self.assertEqual(image.width, 576)
+        self.assertEqual(self.service.printer.status()["last_job"]["module"], "instant")
+
     def scheduled_run(self):
         return self.service.runner.run("fake", trigger="schedule")
 

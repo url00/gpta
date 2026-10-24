@@ -13,7 +13,7 @@ const printerState = document.getElementById("printer-state");
 const logFilter = document.getElementById("log-filter");
 const logList = document.getElementById("log-list");
 
-const DEFAULT_TAB = "about";
+const DEFAULT_TAB = "instant";
 const DEFAULT_PAPER = "80mm";
 const LOG_SHOWN = 300;
 const SERVER_LOGS = "__server__";
@@ -545,6 +545,7 @@ function updateAll() {
     }
   }
   updateSimulator();
+  updateInstant();
   updateLogFilter();
   renderLogs();
 }
@@ -591,6 +592,89 @@ function bindPrinterControls() {
   });
 }
 
+// ---- instant print ---------------------------------------------------
+const INSTANT_DRAFT_KEY = "gpta.instant";
+const instantText = document.getElementById("instant-text");
+const instantSize = document.getElementById("instant-size");
+const instantImg = document.getElementById("instant-img");
+const instantEmpty = document.getElementById("instant-empty");
+const instantNote = document.getElementById("instant-note");
+let instantTimer = null;
+let instantSeq = 0;      // drops preview responses that arrive out of order
+let instantPaper = null; // paper width the preview was drawn for
+
+function instantBody() {
+  return { text: instantText.value, size: instantSize.value };
+}
+
+function saveInstantDraft() {
+  try { localStorage.setItem(INSTANT_DRAFT_KEY, JSON.stringify(instantBody())); } catch { /* private mode */ }
+}
+
+function loadInstantDraft() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(INSTANT_DRAFT_KEY) || "null");
+    if (draft && typeof draft.text === "string") instantText.value = draft.text;
+    if (draft && [...instantSize.options].some((o) => o.value === draft.size)) instantSize.value = draft.size;
+  } catch { /* nothing saved */ }
+}
+
+async function updateInstantPreview() {
+  const seq = ++instantSeq;
+  document.getElementById("instant-count").textContent = `${instantText.value.length} / ${instantText.maxLength}`;
+  if (!instantText.value.trim()) {
+    instantImg.hidden = true;
+    instantEmpty.hidden = false;
+    return;
+  }
+  try {
+    const preview = await api("/api/instant/preview", { method: "POST", body: instantBody() });
+    if (seq !== instantSeq) return;
+    instantImg.src = preview.png;
+    instantImg.hidden = false;
+    instantEmpty.hidden = true;
+  } catch (error) {
+    if (seq === instantSeq) showBanner(error.message);
+  }
+}
+
+function scheduleInstantPreview() {
+  saveInstantDraft();
+  clearTimeout(instantTimer);
+  instantTimer = setTimeout(updateInstantPreview, 300);
+}
+
+function updateInstant() {
+  const printer = state.printer;
+  const disabled = "The printer is disabled. Turn it on in the Printer tab to print.";
+  if (!printer.enabled) instantNote.textContent = disabled;
+  else if (instantNote.textContent === disabled) instantNote.textContent = "";
+  // Re-draw the preview when the paper width changes.
+  if (instantPaper !== null && instantPaper !== printer.width_px) scheduleInstantPreview();
+  instantPaper = printer.width_px;
+}
+
+function bindInstant() {
+  loadInstantDraft();
+  instantText.addEventListener("input", scheduleInstantPreview);
+  instantSize.addEventListener("change", scheduleInstantPreview);
+  const print = document.getElementById("instant-print");
+  print.addEventListener("click", () => {
+    busy(print, async () => {
+      if (!instantText.value.trim()) throw new Error("Nothing to print yet.");
+      await api("/api/instant/print", { method: "POST", body: instantBody() });
+      instantNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.`;
+      await refresh();
+    });
+  });
+  document.getElementById("instant-clear").addEventListener("click", () => {
+    instantText.value = "";
+    scheduleInstantPreview();
+    instantText.focus();
+  });
+  updateInstantPreview();
+}
+
 function bindSimulator() {
   simSelect.addEventListener("change", () => {
     selected = simSelect.value;
@@ -605,6 +689,7 @@ function bindLogs() {
 
 async function init() {
   bindTabs();
+  bindInstant();
   bindPrinterControls();
   bindSimulator();
   bindLogs();

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, fields
 from typing import Any, ClassVar
 
 ALIGNS = ("left", "center", "right")
-SIZES = ("small", "body", "large")
+SIZES = ("small", "body", "large", "huge")
 
 
 def _str(value: Any, name: str) -> str:
@@ -71,7 +71,7 @@ class Heading:
 
 @dataclass(frozen=True)
 class Text:
-    """A wrapped paragraph. ``size`` is small, body, or large."""
+    """A wrapped paragraph. ``size`` is small, body, large, or huge."""
 
     kind: ClassVar[str] = "text"
 

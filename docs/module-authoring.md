@@ -83,14 +83,14 @@ dropped with a warning in the log. Renaming an option therefore resets it.
 `fetch()` returns a list of blocks, all importable from `gpta.module_api`. The
 host adds a header (the module name) and a footer (the run time) and lays
 everything out on a 1-bit image as wide as the paper (576 dots on 80 mm, 384
-on 58 mm), in DejaVu Sans Mono at three sizes (small, body, large). Text is
+on 58 mm), in DejaVu Sans Mono at four sizes (small, body, large, huge). Text is
 wrapped to the paper width; don't pre-wrap or pad it.
 
 | Block | Fields | Prints |
 |---|---|---|
 | `Block(title, lines, meta={})` | `str`, `tuple[str, ...]`, `dict` | A large bold title over body-text lines; `""` adds a half-line gap |
 | `Heading(text)` | `str` | Large bold text |
-| `Text(text, size="body", bold=False, align="left")` | `size`: `small`, `body`, `large`; `align`: `left`, `center`, `right` | A wrapped paragraph; `\n` starts a new line |
+| `Text(text, size="body", bold=False, align="left")` | `size`: `small`, `body`, `large`, `huge`; `align`: `left`, `center`, `right` | A wrapped paragraph; `\n` starts a new line |
 | `Rule(heavy=False)` | `bool` | A horizontal line (2 dots, or 4 when heavy) |
 | `KeyValue(label, value)` | `str`, `str` | Label on the left, bold value right-aligned; wraps onto two lines if both don't fit |
 | `Checkbox(text, checked=False, value="", note="")` | `str`, `bool`, `str`, `str` | A drawn box (filled when checked), `text` with a hanging indent, bold `value` right-aligned on the first line (e.g. a due date), and `note` in small text underneath |

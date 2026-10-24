@@ -5,6 +5,10 @@ class NotFound(Exception):
     """Unknown module or output."""
 
 
+class InvalidRequest(Exception):
+    """A request the service rejects as malformed (HTTP 400)."""
+
+
 class AlreadyRunning(Exception):
     """The module already has an active run."""
 

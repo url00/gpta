@@ -75,7 +75,7 @@ class BlockTests(unittest.TestCase):
         for bad in (
             {"kind": "photo"},
             {"kind": "text"},
-            {"kind": "text", "text": "x", "size": "huge"},
+            {"kind": "text", "text": "x", "size": "giant"},
             {"kind": "bar_chart", "bars": [{"label": "a", "value": "x"}]},
             {"kind": "key_value", "label": 1, "value": "x"},
             "text",

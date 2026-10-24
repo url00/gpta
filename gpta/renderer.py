@@ -510,7 +510,12 @@ def _layout_element(out: _Layout, element: Any) -> None:
     elif isinstance(element, Heading):
         out.text(element.text, theme.large, bold=True)
     elif isinstance(element, Text):
-        size = {"small": theme.small, "body": theme.body, "large": theme.large}
+        size = {
+            "small": theme.small,
+            "body": theme.body,
+            "large": theme.large,
+            "huge": theme.title,
+        }
         out.text(
             element.text, size[element.size], bold=element.bold, align=element.align
         )
