@@ -118,6 +118,21 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
 
+    def test_wrong_method_returns_405_with_allow(self):
+        status, _, headers = self.request("GET", "/api/printer/test")
+        self.assertEqual(status, 405)
+        self.assertEqual(headers["Allow"], "POST")
+        status, _, headers = self.request("DELETE", "/api/state")
+        self.assertEqual(status, 501)  # verb not implemented at all
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            status, body = self.raw_request(conn, "HEAD", "/api/state")
+            self.assertEqual((status, body), (405, b""))
+            status, _ = self.raw_request(conn, "GET", "/api/state")
+            self.assertEqual(status, 200)
+        finally:
+            conn.close()
+
     def test_static_traversal_blocked(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request("GET", "/static/../gpta/__init__.py")

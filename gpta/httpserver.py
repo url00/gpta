@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import re
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
 from .config import ConfigError
 from .errors import AlreadyRunning, NotFound
@@ -30,6 +31,34 @@ class Forbidden(Exception):
 
 class ValidationError(Exception):
     """Malformed request (400)."""
+
+
+class MethodNotAllowed(Exception):
+    """The path exists but not for this method (405)."""
+
+    def __init__(self, allowed: list[str]):
+        super().__init__("method not allowed")
+        self.allowed = allowed
+
+
+# (method, path pattern, handler name). Handler ``_h_<name>`` receives the
+# pattern's named groups as keyword arguments. POST/PATCH bodies are parsed
+# before the handler runs and are available as ``self._body_json``.
+ROUTES: list[tuple[str, re.Pattern[str], str]] = [
+    (method, re.compile(pattern), name)
+    for method, pattern, name in (
+        ("GET", r"/", "index"),
+        ("GET", r"/favicon\.ico", "favicon"),
+        ("GET", r"/static/(?P<rel>.+)", "static"),
+        ("GET", r"/api/state", "state"),
+        ("GET", r"/api/logs", "logs"),
+        ("GET", r"/api/output/(?P<key>[^/]+)", "output"),
+        ("PATCH", r"/api/modules/(?P<module_id>[^/]+)", "patch_module"),
+        ("POST", r"/api/modules/(?P<module_id>[^/]+)/run", "run_module"),
+        ("PATCH", r"/api/printer", "patch_printer"),
+        ("POST", r"/api/printer/test", "test_printer"),
+    )
+]
 
 
 def _hostname(value: str) -> str:
@@ -69,98 +98,90 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- verbs ---------------------------------------------------------
     def do_GET(self) -> None:
-        self._dispatch(self._get)
+        self._dispatch()
 
     def do_POST(self) -> None:
-        self._dispatch(self._post)
+        self._dispatch()
 
     def do_PATCH(self) -> None:
-        self._dispatch(self._patch)
+        self._dispatch()
 
     def do_HEAD(self) -> None:
-        self._send_headers(405, "text/plain; charset=utf-8", 0)
+        self._dispatch()
 
     # -- routing -------------------------------------------------------
-    def _get(self) -> None:
+    def _route(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
         path = urllib.parse.unquote(parsed.path)
-        if path == "/":
-            self._serve_static("index.html")
+        self._query = urllib.parse.parse_qs(parsed.query)
+        allowed: list[str] = []
+        for method, pattern, name in ROUTES:
+            match = pattern.fullmatch(path)
+            if match is None:
+                continue
+            if method != self.command:
+                allowed.append(method)
+                continue
+            if method in STATE_CHANGING:
+                # Every write needs a JSON body (empty is fine). Cross-site
+                # HTML forms cannot send application/json.
+                self._body_json = self._read_json()
+            getattr(self, f"_h_{name}")(**match.groupdict())
             return
-        if path == "/favicon.ico":
-            self.send_response(204)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        if path.startswith("/static/"):
-            self._serve_static(path[len("/static/") :])
-            return
-        if path == "/api/state":
-            self._json(200, self.server.service.snapshot())
-            return
-        if path == "/api/logs":
-            query = urllib.parse.parse_qs(parsed.query)
-            raw = query.get("since", ["0"])[0]
-            try:
-                since = int(raw)
-            except ValueError as exc:
-                raise ValidationError("since must be an integer") from exc
-            entries = self.server.service.logbus.since(since)
-            next_seq = entries[-1]["seq"] if entries else since
-            self._json(200, {"entries": entries, "next": next_seq})
-            return
-        if path.startswith("/api/output/"):
-            key = path[len("/api/output/") :]
-            if not key or "/" in key:
-                raise NotFound("unknown output")
-            text = self.server.service.output_text(key)
-            self._text(200, text)
-            return
+        if allowed:
+            raise MethodNotAllowed(allowed)
         raise NotFound("not found")
 
-    def _post(self) -> None:
-        parsed = urllib.parse.urlsplit(self.path)
-        path = urllib.parse.unquote(parsed.path)
-        # No POST endpoint takes a body today, but requiring JSON keeps
-        # cross-site form posts out (they cannot send application/json).
-        self._read_json()
-        if path.startswith("/api/modules/"):
-            parts = [p for p in path[len("/api/modules/") :].split("/") if p]
-            if len(parts) == 2 and parts[1] == "run":
-                result = self.server.service.run_module(parts[0], trigger="manual")
-                self._json(200, result)
-                return
-        if path == "/api/printer/test":
-            self._json(200, self.server.service.test_printer())
-            return
-        raise NotFound("not found")
+    # -- handlers (one per entry in ROUTES) ----------------------------
+    def _h_index(self) -> None:
+        self._serve_static("index.html")
 
-    def _patch(self) -> None:
-        parsed = urllib.parse.urlsplit(self.path)
-        path = urllib.parse.unquote(parsed.path)
-        body = self._read_json()
-        if path.startswith("/api/modules/"):
-            module_id = path[len("/api/modules/") :]
-            if not module_id or "/" in module_id:
-                raise NotFound("unknown module")
-            module = self.server.service.update_module(module_id, body)
-            self._json(200, {"module": module})
-            return
-        if path == "/api/printer":
-            printer = self.server.service.set_printer(body)
-            self._json(200, {"printer": printer})
-            return
-        raise NotFound("not found")
+    def _h_favicon(self) -> None:
+        self._send_headers(204, "text/plain; charset=utf-8", 0)
+
+    def _h_static(self, rel: str) -> None:
+        self._serve_static(rel)
+
+    def _h_state(self) -> None:
+        self._json(200, self.server.service.snapshot())
+
+    def _h_logs(self) -> None:
+        raw = self._query.get("since", ["0"])[0]
+        try:
+            since = int(raw)
+        except ValueError as exc:
+            raise ValidationError("since must be an integer") from exc
+        entries = self.server.service.logbus.since(since)
+        next_seq = entries[-1]["seq"] if entries else since
+        self._json(200, {"entries": entries, "next": next_seq})
+
+    def _h_output(self, key: str) -> None:
+        self._text(200, self.server.service.output_text(key))
+
+    def _h_patch_module(self, module_id: str) -> None:
+        module = self.server.service.update_module(module_id, self._body_json)
+        self._json(200, {"module": module})
+
+    def _h_run_module(self, module_id: str) -> None:
+        self._json(200, self.server.service.run_module(module_id, trigger="manual"))
+
+    def _h_patch_printer(self) -> None:
+        printer = self.server.service.set_printer(self._body_json)
+        self._json(200, {"printer": printer})
+
+    def _h_test_printer(self) -> None:
+        self._json(200, self.server.service.test_printer())
 
     # -- dispatch ------------------------------------------------------
-    def _dispatch(self, fn: Callable[[], None]) -> None:
+    def _dispatch(self) -> None:
         self._body: bytes | None = None
+        self._body_json: dict[str, Any] = {}
         try:
             self._receive_body()
             self._check_host()
             if self.command in STATE_CHANGING:
                 self._check_origin()
-            fn()
+            self._route()
         except Forbidden as exc:
             log.warning(
                 "403 %s %s (Host=%r Origin=%r): %s",
@@ -173,6 +194,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": str(exc)})
         except NotFound as exc:
             self._json(404, {"error": str(exc)})
+        except MethodNotAllowed as exc:
+            self._json(
+                405,
+                {"error": "method not allowed"},
+                {"Allow": ", ".join(sorted(set(exc.allowed)))},
+            )
         except (ValidationError, ConfigError) as exc:
             self._json(400, {"error": str(exc)})
         except AlreadyRunning as exc:
@@ -190,18 +217,29 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": f"internal error: {exc}"})
 
     # -- responses -----------------------------------------------------
-    def _send_headers(self, status: int, content_type: str, length: int) -> None:
+    def _send_headers(
+        self,
+        status: int,
+        content_type: str,
+        length: int,
+        extra: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        for name, value in (extra or {}).items():
+            self.send_header(name, value)
         self.end_headers()
 
-    def _json(self, status: int, payload: Any) -> None:
+    def _json(
+        self, status: int, payload: Any, headers: dict[str, str] | None = None
+    ) -> None:
         data = json.dumps(payload).encode("utf-8")
-        self._send_headers(status, "application/json; charset=utf-8", len(data))
-        self.wfile.write(data)
+        self._send_headers(status, "application/json; charset=utf-8", len(data), headers)
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def _text(self, status: int, text: str) -> None:
         data = text.encode("utf-8")
