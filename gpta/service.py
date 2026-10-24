@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__, reader
-from .blocks import Text, from_dict, to_dict
+from .blocks import Rule, Text, from_dict, to_dict
 from .config import PAPERS, ConfigStore
 from .errors import InvalidRequest, NotFound
 from .http import HttpClient
@@ -26,6 +26,7 @@ from .outputs import OutputStore
 from .printing import Printer, PrinterWriter
 from .registry import describe
 from .renderer import (
+    LAYOUTS,
     PRINT_SIZES,
     Receipt,
     build_receipt,
@@ -41,6 +42,19 @@ from .state import StateStore
 
 #: Longest text the Instant tab may print in one job.
 INSTANT_MAX_CHARS = 5000
+
+
+def print_style(body: dict, elements=()) -> dict[str, Any]:
+    """Keyword arguments for :func:`render_image` from a request's ``size``
+    and ``layout``. In two columns, everything up to the first heavy rule
+    (a web page's header) stays full width."""
+    layout = body.get("layout", "single")
+    if layout not in LAYOUTS:
+        raise InvalidRequest(f"layout must be one of {', '.join(LAYOUTS)}")
+    lead = next(
+        (i + 1 for i, e in enumerate(elements) if isinstance(e, Rule) and e.heavy), 0
+    )
+    return {"scale": print_size(body), "layout": layout, "lead": lead}
 
 
 def print_size(body: dict) -> float:
@@ -169,12 +183,12 @@ class Service:
     def instant_preview(self, body: Any) -> dict[str, Any]:
         """The image an instant print would produce, as a PNG data URL."""
         receipt = instant_receipt(body)
-        image = render_image(receipt, self._width_px(), print_size(body))
+        image = render_image(receipt, self._width_px(), **print_style(body))
         return {"png": _png_url(image), "height_px": image.height}
 
     def instant_print(self, body: Any) -> dict[str, Any]:
         receipt = instant_receipt(body)
-        image = render_image(receipt, self._width_px(), print_size(body))
+        image = render_image(receipt, self._width_px(), **print_style(body))
         self.printer.submit(image, "instant", manual=True)
         module_log(f"instant print: {len(receipt.elements[0].text)} characters")
         return {"ok": True}
@@ -190,7 +204,7 @@ class Service:
         """
         if not isinstance(body, dict):
             raise InvalidRequest("body must be an object")
-        scale = print_size(body)
+        print_style(body)  # validate before fetching
         offset = body.get("offset", 0)
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise InvalidRequest("offset must be a whole number of 0 or more")
@@ -207,7 +221,8 @@ class Service:
             )
         receipt = self._reader_receipt(article.elements(part))
         module_log(f"reader fetched {page.url} from character {part.start}")
-        image = render_image(receipt, self._width_px(), scale)
+        style = print_style(body, receipt.elements)
+        image = render_image(receipt, self._width_px(), **style)
         return {
             "title": article.title,
             "url": page.url,
@@ -226,7 +241,7 @@ class Service:
             raise InvalidRequest("nothing to print; fetch a page first")
         if len(raw) > READER_MAX_BLOCKS:
             raise InvalidRequest(f"at most {READER_MAX_BLOCKS} blocks can be printed")
-        scale = print_size(body)
+        print_style(body)  # validate before parsing blocks
         try:
             elements = [from_dict(item) for item in raw]
         except ValueError as exc:
@@ -235,7 +250,8 @@ class Service:
         # covers its header and footer. Anything longer did not come from a
         # fetch and is cut.
         receipt = self._reader_receipt(elements, READER_MAX_CHARS + 2000)
-        image = render_image(receipt, self._width_px(), scale)
+        style = print_style(body, receipt.elements)
+        image = render_image(receipt, self._width_px(), **style)
         self.printer.submit(image, "reader", manual=True)
         module_log(f"reader print: {len(elements)} blocks")
         return {"ok": True}

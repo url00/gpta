@@ -172,6 +172,40 @@ class ImageTests(unittest.TestCase):
         self.assertEqual(theme_for(576, print_scale("body")), theme_for(576))
         self.assertGreaterEqual(theme_for(384, print_scale("tiny")).small, 11)
 
+    def test_double_columns(self):
+        from gpta.renderer import COLUMN_BAND_MAX_PX
+
+        para = "Columns split long text between lines, newspaper style. " * 6
+        elements = [Heading("Title"), Rule(heavy=True), Text(para), Text(para)]
+        receipt = build_receipt("", elements, now=NOW)
+        single = render_image(receipt, 576)
+        double = render_image(receipt, 576, layout="double", lead=2)
+        self.assertEqual(double.width, 576)
+        self.assertLess(double.height, single.height)
+
+        def ink(image, box):
+            return sum(1 for v in image.convert("L").crop(box).getdata() if v == 0)
+
+        # Body text sits on both sides of the centre rule, roughly balanced.
+        top, bottom = 120, double.height - 60
+        left = ink(double, (0, top, 280, bottom))
+        right = ink(double, (296, top, 576, bottom))
+        self.assertGreater(min(left, right), 0.6 * max(left, right))
+
+        # Long text becomes several bands, none taller than the cap.
+        long = build_receipt("", [Text(para)] * 40, now=NOW)
+        image = render_image(long, 576, layout="double").convert("L")
+        centre = [image.getpixel((287, y)) == 0 for y in range(image.height)]
+        runs, length = [], 0
+        for dark in centre + [False]:
+            if dark:
+                length += 1
+            elif length:
+                runs.append(length)
+                length = 0
+        self.assertGreater(len(runs), 1)
+        self.assertLessEqual(max(runs), COLUMN_BAND_MAX_PX + 60)
+
     def test_checkbox_text(self):
         lines = render_text(
             Receipt("", (Checkbox("Soon", value="Oct 20", note="n"),), ""), 20

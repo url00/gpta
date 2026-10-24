@@ -596,6 +596,7 @@ function bindPrinterControls() {
 const INSTANT_DRAFT_KEY = "gpta.instant";
 const instantText = document.getElementById("instant-text");
 const instantSize = document.getElementById("instant-size");
+const instantLayout = document.getElementById("instant-layout");
 const instantImg = document.getElementById("instant-img");
 const instantEmpty = document.getElementById("instant-empty");
 const instantNote = document.getElementById("instant-note");
@@ -604,7 +605,7 @@ let instantSeq = 0;      // drops preview responses that arrive out of order
 let instantPaper = null; // paper width the preview was drawn for
 
 function instantBody() {
-  return { text: instantText.value, size: instantSize.value };
+  return { text: instantText.value, size: instantSize.value, layout: instantLayout.value };
 }
 
 function saveInstantDraft() {
@@ -615,7 +616,9 @@ function loadInstantDraft() {
   try {
     const draft = JSON.parse(localStorage.getItem(INSTANT_DRAFT_KEY) || "null");
     if (draft && typeof draft.text === "string") instantText.value = draft.text;
-    if (draft && [...instantSize.options].some((o) => o.value === draft.size)) instantSize.value = draft.size;
+    for (const [select, value] of [[instantSize, draft && draft.size], [instantLayout, draft && draft.layout]]) {
+      if ([...select.options].some((o) => o.value === value)) select.value = value;
+    }
   } catch { /* nothing saved */ }
 }
 
@@ -658,6 +661,7 @@ function bindInstant() {
   loadInstantDraft();
   instantText.addEventListener("input", scheduleInstantPreview);
   instantSize.addEventListener("change", scheduleInstantPreview);
+  instantLayout.addEventListener("change", scheduleInstantPreview);
   const print = document.getElementById("instant-print");
   print.addEventListener("click", () => {
     busy(print, async () => {
@@ -680,6 +684,7 @@ function bindInstant() {
 // is 1-based for people; the API's offset is 0-based.
 const readerUrl = document.getElementById("reader-url");
 const readerSize = document.getElementById("reader-size");
+const readerLayout = document.getElementById("reader-layout");
 const readerStart = document.getElementById("reader-start");
 const readerImg = document.getElementById("reader-img");
 const readerEmpty = document.getElementById("reader-empty");
@@ -719,7 +724,7 @@ function bindReader() {
     try {
       showReaderPage(await api("/api/reader/fetch", {
         method: "POST",
-        body: { url, offset: readerStartOffset(), size: readerSize.value },
+        body: { url, offset: readerStartOffset(), size: readerSize.value, layout: readerLayout.value },
       }));
     } catch (error) {
       readerMeta.textContent = "";
@@ -733,7 +738,9 @@ function bindReader() {
   // A new link starts from the beginning.
   readerUrl.addEventListener("change", () => { readerStart.value = "1"; });
   // Re-fetch so the preview matches the new size (only after a fetch).
-  readerSize.addEventListener("change", () => { if (readerPage) fetchPage(); });
+  for (const select of [readerSize, readerLayout]) {
+    select.addEventListener("change", () => { if (readerPage) fetchPage(); });
+  }
   readerNext.addEventListener("click", () => {
     if (!readerPage || readerPage.next_offset === null) return;
     readerStart.value = String(readerPage.next_offset + 1);
@@ -744,7 +751,7 @@ function bindReader() {
       if (!readerPage) throw new Error("Fetch a page first.");
       await api("/api/reader/print", {
         method: "POST",
-        body: { blocks: readerPage.blocks, size: readerSize.value },
+        body: { blocks: readerPage.blocks, size: readerSize.value, layout: readerLayout.value },
       });
       const more = readerPage.next_offset === null ? "" : " Use Next part to continue.";
       readerNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.${more}`;

@@ -9,6 +9,7 @@ debugging.
 from __future__ import annotations
 
 import io
+import math
 import struct
 import textwrap
 import threading
@@ -482,14 +483,24 @@ Paint = Callable[[ImageDraw.ImageDraw, int], None]
 class _Layout:
     """Stacks rows top to bottom, then paints them onto one image."""
 
-    def __init__(self, width: int, scale: float = 1.0):
+    def __init__(
+        self,
+        width: int,
+        scale: float = 1.0,
+        *,
+        theme: Theme | None = None,
+        pad: bool = True,
+    ):
+        """``theme`` overrides the paper's sizes (columns use the full-width
+        ones); ``pad`` adds the top and bottom margin."""
         self.width = width
-        self.theme = theme_for(width, scale)
+        self.theme = theme or theme_for(width, scale)
         self.left = self.theme.margin
         self.right = width - self.theme.margin
         self.inner = self.right - self.left
         self.gap = self.theme.body // 2
-        self.y = self.theme.margin
+        self.pad = self.theme.margin if pad else 0
+        self.y = self.pad
         self.rows: list[tuple[int, Paint]] = []
 
     def add(self, height: int, paint: Paint | None = None) -> None:
@@ -525,14 +536,28 @@ class _Layout:
             lambda draw, y: draw.rectangle([x0, y, x1, y + thickness - 1], fill=0),
         )
 
-    def image(self) -> Image.Image:
-        height = max(1, self.y + self.theme.margin)
-        canvas = Image.new("L", (self.width, height), 255)
+    def canvas(self) -> Image.Image:
+        """The rows painted in grayscale ("L"), before thresholding."""
+        canvas = Image.new("L", (self.width, max(1, self.y + self.pad)), 255)
         draw = ImageDraw.Draw(canvas)
         for y, paint in self.rows:
             paint(draw, y)
+        return canvas
+
+    def items(self) -> list[tuple[int, Paint]]:
+        """Rows as ``(height, paint)``; a row's height runs to the next row,
+        so blank space travels with the row above it."""
+        out = []
+        for index, (y, paint) in enumerate(self.rows):
+            following = (
+                self.rows[index + 1][0] if index + 1 < len(self.rows) else self.y
+            )
+            out.append((following - y, paint))
+        return out
+
+    def image(self) -> Image.Image:
         # A hard threshold keeps glyph edges crisp; dithering would speckle them.
-        return canvas.convert("1", dither=Image.Dither.NONE)
+        return self.canvas().convert("1", dither=Image.Dither.NONE)
 
 
 def _layout_element(out: _Layout, element: Any) -> None:
@@ -683,11 +708,30 @@ def _layout_ruler(out: _Layout) -> None:
     out.add(32, paint)
 
 
-def render_image(receipt: Receipt, width_px: int, scale: float = 1.0) -> Image.Image:
+LAYOUTS = ("single", "double")
+# Tallest a column may grow before the text continues in a new band below,
+# so a reader never has to travel far back up the paper (about 15 cm).
+COLUMN_BAND_MAX_PX = 1200
+COLUMN_RULE_PX = 2
+
+
+def render_image(
+    receipt: Receipt,
+    width_px: int,
+    scale: float = 1.0,
+    *,
+    layout: str = "single",
+    lead: int = 0,
+) -> Image.Image:
     """``receipt`` as a 1-bit image ``width_px`` dots wide (0 = black).
 
     ``scale`` multiplies every font size (see :func:`print_scale`).
+    ``layout="double"`` sets body text in two columns; the first ``lead``
+    elements (a header), headings, rules and centred text stay full width.
     """
+    if layout == "double":
+        with _RENDER_LOCK:
+            return _render_columns(receipt, int(width_px), scale, lead)
     with _RENDER_LOCK:
         out = _Layout(int(width_px), scale)
         theme = out.theme
@@ -703,6 +747,133 @@ def render_image(receipt: Receipt, width_px: int, scale: float = 1.0) -> Image.I
             out.add(out.gap // 2)
             out.text(receipt.stamp, theme.small, align="center")
         return out.image()
+
+
+def _full_width(element: Any) -> bool:
+    if isinstance(element, (Heading, Rule, Ruler)):
+        return True
+    return isinstance(element, Text) and element.align != "left"
+
+
+def _render_columns(
+    receipt: Receipt, width: int, scale: float, lead: int
+) -> Image.Image:
+    """Two-column layout: full-width pieces stacked with column bands."""
+    theme = theme_for(width, scale)
+    pieces: list[Image.Image] = []
+    full = _Layout(width, theme=theme, pad=False)
+    run: list[Element] = []
+
+    def flush_full() -> None:
+        nonlocal full
+        if full.y:
+            pieces.append(full.canvas())
+        full = _Layout(width, theme=theme, pad=False)
+
+    def flush_run() -> None:
+        if run:
+            flush_full()
+            pieces.extend(_column_bands(run, width, theme))
+            run.clear()
+
+    if receipt.title:
+        full.text(receipt.title.upper(), theme.title, bold=True, align="center")
+        full.add(full.gap // 2)
+        full.rule(4)
+        full.add(full.gap)
+    for index, element in enumerate(receipt.elements):
+        if index < lead or _full_width(element):
+            flush_run()
+            _layout_element(full, element)
+        else:
+            run.append(element)
+    flush_run()
+    if receipt.stamp:
+        full.rule(2)
+        full.add(full.gap // 2)
+        full.text(receipt.stamp, theme.small, align="center")
+    flush_full()
+
+    margin = theme.margin
+    height = margin * 2 + sum(piece.height for piece in pieces)
+    canvas = Image.new("L", (width, max(1, height)), 255)
+    y = margin
+    for piece in pieces:
+        canvas.paste(piece, (0, y))
+        y += piece.height
+    return canvas.convert("1", dither=Image.Dither.NONE)
+
+
+def _column_bands(
+    elements: list[Element], width: int, theme: Theme
+) -> list[Image.Image]:
+    """Lay ``elements`` out in half-width columns, balanced side by side.
+
+    Text flows down the left column and continues at the top of the right
+    one; splits fall between lines. Longer runs become several bands, each
+    at most :data:`COLUMN_BAND_MAX_PX` tall, read one after the other.
+    """
+    gutter = theme.margin
+    column_w = (width - gutter) // 2
+    column = _Layout(column_w, theme=theme, pad=False)
+    for element in elements:
+        _layout_element(column, element)
+    items = column.items()
+    if not items:
+        return []
+    total = sum(height for height, _paint in items)
+    bands = max(1, math.ceil(total / (2 * COLUMN_BAND_MAX_PX)))
+    groups: list[list[tuple[int, Paint]]] = [[] for _ in range(bands)]
+    used = 0
+    for item in items:  # fill bands in order, each to an equal share
+        index = min(bands - 1, int(used * bands / total))
+        groups[index].append(item)
+        used += item[0]
+    out = []
+    for number, group in enumerate(group for group in groups if group):
+        if number:
+            out.append(_band_break(width, theme))
+        out.append(_band(group, width, column_w))
+    return out
+
+
+def _band(items: list[tuple[int, Paint]], width: int, column_w: int) -> Image.Image:
+    heights = [height for height, _paint in items]
+    total = sum(heights)
+    # The split that makes the taller column as short as possible; the left
+    # column keeps the extra line when they cannot be equal.
+    best, best_cost, left = len(items), total, 0
+    for split in range(len(items) + 1):
+        cost = max(left, total - left)
+        if cost < best_cost or cost == best_cost and left >= total - left:
+            best, best_cost = split, cost
+        if split < len(items):
+            left += heights[split]
+    band = Image.new("L", (width, max(1, best_cost)), 255)
+    for x0, group in ((0, items[:best]), (width - column_w, items[best:])):
+        column = Image.new("L", (column_w, band.height), 255)
+        draw = ImageDraw.Draw(column)
+        y = 0
+        for height, paint in group:
+            paint(draw, y)
+            y += height
+        band.paste(column, (x0, 0))
+    mid = width // 2 - COLUMN_RULE_PX // 2
+    ImageDraw.Draw(band).rectangle(
+        [mid, 0, mid + COLUMN_RULE_PX - 1, band.height - 1], fill=0
+    )
+    return band
+
+
+def _band_break(width: int, theme: Theme) -> Image.Image:
+    """A dotted line between bands: read on below."""
+    height = theme.body
+    piece = Image.new("L", (width, height), 255)
+    draw = ImageDraw.Draw(piece)
+    mid = height // 2
+    for x in range(theme.margin, width - theme.margin, 8):
+        draw.rectangle([x, mid - 1, x + 2, mid + 1], fill=0)
+    return piece
 
 
 SEPARATOR_HEIGHT = 48
