@@ -99,12 +99,13 @@ cutter, then cut", so the last lines are never cut off; `printer.feed_lines`
 adds extra blank space before it. Use width 48 for 80 mm paper, 32 for 58 mm.
 With the printer disabled, runs still update the simulator but never print.
 
-Writes are serialized and time-limited. Prints are spaced at least
-`printer.min_print_spacing_seconds` apart (default 30) and capped at
-`printer.max_prints_per_hour` (default 60): throttled auto-prints are skipped
-and logged; a throttled test print returns 429. After
-`printer.failure_threshold` consecutive device failures (default 3) the printer
-disables itself; enabling it again clears the count.
+Writes are serialized and time-limited. Scheduled prints are spaced at least
+`printer.min_print_spacing_seconds` apart (default 30); prints you ask for
+(**Run now**, **Test print**) skip the spacing. All prints count toward
+`printer.max_prints_per_hour` (default 60). A skipped print is logged and the
+module card shows why ("Not printed: ..."); a test print over the hourly cap
+returns 429. After `printer.failure_threshold` consecutive failures (default
+3) the printer disables itself; enabling it again clears the count.
 
 ## Security
 

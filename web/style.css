@@ -117,6 +117,8 @@ main {
 .actions a { color: var(--accent); font-size: 0.8rem; margin-left: auto; }
 .card-error { color: var(--danger); font-size: 0.8rem; margin: 0.55rem 0 0; }
 .card-error:empty { display: none; }
+.card-note { color: var(--muted); font-size: 0.8rem; margin: 0.55rem 0 0; }
+.card-note:empty { display: none; }
 
 details { margin-top: 0.75rem; border-top: 1px solid var(--line); padding-top: 0.6rem; }
 summary { cursor: pointer; color: var(--muted); font-size: 0.82rem; }

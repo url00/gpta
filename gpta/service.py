@@ -113,7 +113,7 @@ class Service:
     def test_printer(self) -> dict[str, Any]:
         width = self.config.snapshot()["printer"]["width"]
         lines = test_receipt(width, datetime.fromtimestamp(self.clock(), UTC))
-        self.printer.submit(lines, "test")
+        self.printer.submit(lines, "test", manual=True)
         return {"ok": True, "lines": lines}
 
     # -- snapshots -----------------------------------------------------

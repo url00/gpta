@@ -69,8 +69,8 @@ class LoggingTests(unittest.TestCase):
             {"enabled": True, "auto_print": True, "min_print_spacing_seconds": 600}
         )
         with patch("gpta.printing.transport.send_to_device"):
-            self.service.run_module("emit")
-            self.service.run_module("emit")
+            self.service.runner.run("emit", trigger="schedule")
+            self.service.runner.run("emit", trigger="schedule")
         skipped = [e for e in self.entries() if "print skipped" in e["message"]]
         self.assertEqual(len(skipped), 1)
         self.assertEqual(skipped[0]["level"], "info")

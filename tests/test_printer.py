@@ -83,14 +83,53 @@ class PrinterSafetyTests(unittest.TestCase):
         self.assertEqual(max_active, 1)
         self.assertEqual(calls, 2)
 
-    def test_minimum_spacing_skips_autoprint(self):
+    def scheduled_run(self):
+        return self.service.runner.run("fake", trigger="schedule")
+
+    def test_minimum_spacing_skips_scheduled_autoprint(self):
         self.enable_printer(min_print_spacing_seconds=30)
         with patch("gpta.printing.transport.send_to_device") as send:
-            first = self.service.run_module("fake")
-            second = self.service.run_module("fake")
+            first = self.scheduled_run()
+            second = self.scheduled_run()
         self.assertTrue(first["printed"])
         self.assertFalse(second["printed"])
+        self.assertIn("minimum spacing", second["print_skipped"])
+        self.assertIn("minimum spacing", second["runtime"]["print_skipped"])
         self.assertEqual(send.call_count, 1)
+
+    def test_manual_prints_skip_spacing(self):
+        self.enable_printer(min_print_spacing_seconds=30)
+        with patch("gpta.printing.transport.send_to_device") as send:
+            self.service.test_printer()
+            run = self.service.run_module("fake")  # Run now, right after
+            self.service.test_printer()
+        self.assertTrue(run["printed"])
+        self.assertIsNone(run["print_skipped"])
+        self.assertEqual(send.call_count, 3)
+        # ...but a scheduled print still waits for the spacing.
+        with patch("gpta.printing.transport.send_to_device") as send:
+            self.assertFalse(self.scheduled_run()["printed"])
+        send.assert_not_called()
+
+    def test_skip_reason_clears_after_a_print(self):
+        self.enable_printer(min_print_spacing_seconds=30)
+        with patch("gpta.printing.transport.send_to_device"):
+            self.scheduled_run()
+            self.assertTrue(self.scheduled_run()["print_skipped"])
+            self.assertIsNone(self.service.run_module("fake")["print_skipped"])
+
+    def test_auto_print_off_is_reported(self):
+        self.enable_printer(auto_print=False)
+        with patch("gpta.printing.transport.send_to_device") as send:
+            result = self.service.run_module("fake")
+        send.assert_not_called()
+        self.assertEqual(result["print_skipped"], "auto print is off")
+
+    def test_printer_disabled_reports_nothing(self):
+        with patch("gpta.printing.transport.send_to_device") as send:
+            result = self.service.run_module("fake")
+        send.assert_not_called()
+        self.assertIsNone(result["print_skipped"])
 
     def test_hourly_cap_skips_autoprint(self):
         self.enable_printer(max_prints_per_hour=1)
@@ -101,13 +140,13 @@ class PrinterSafetyTests(unittest.TestCase):
         self.assertFalse(second["printed"])
         self.assertEqual(send.call_count, 1)
 
-    def test_manual_test_print_rate_limited(self):
-        self.enable_printer(min_print_spacing_seconds=30)
+    def test_manual_test_print_hits_hourly_cap(self):
+        self.enable_printer(max_prints_per_hour=1)
         with patch("gpta.printing.transport.send_to_device"):
             self.service.test_printer()
             with self.assertRaises(PrinterRateLimited) as caught:
                 self.service.test_printer()
-        self.assertIn("rate limited", str(caught.exception))
+        self.assertIn("hourly limit", str(caught.exception))
 
     def test_consecutive_failures_trip_circuit_breaker(self):
         self.enable_printer(failure_threshold=2)

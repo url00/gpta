@@ -26,6 +26,10 @@ class PrinterDisabled(Exception):
     """Printing (or auto-printing) is switched off in the config."""
 
 
+class AutoPrintOff(PrinterDisabled):
+    """The printer is on, but ``printer.auto_print`` is off."""
+
+
 class PrinterRateLimited(PrinterError):
     """A physical print was suppressed by the rate limiter."""
 
@@ -52,21 +56,32 @@ class Printer:
         self._disabled_reason: str | None = None
         self._consecutive_failures = 0
 
-    def submit(self, lines: Sequence[str], source: str, *, auto: bool = False) -> None:
+    def submit(
+        self,
+        lines: Sequence[str],
+        source: str,
+        *,
+        auto: bool = False,
+        manual: bool = False,
+    ) -> None:
         """Print ``lines`` now, or raise why not.
 
         ``source`` is a module id or ``"test"``. ``auto`` marks a module's
-        automatic print, which also needs ``printer.auto_print``.
+        automatic print, which also needs ``printer.auto_print``. ``manual``
+        marks a print the operator asked for (Run now, Test print): it skips
+        the minimum spacing but still counts toward the hourly cap, which is
+        what stops a runaway loop.
 
-        Raises :class:`PrinterDisabled`, :class:`PrinterRateLimited`, or
-        :class:`PrinterError` for a device failure.
+        Raises :class:`PrinterDisabled` (or its :class:`AutoPrintOff`),
+        :class:`PrinterRateLimited`, or :class:`PrinterError` for a device
+        failure.
         """
         cfg = self._config.snapshot()["printer"]
         if not cfg["enabled"]:
             raise PrinterDisabled("printer is disabled")
         if auto and not cfg["auto_print"]:
-            raise PrinterDisabled("auto print is off")
-        reason = self._reserve(cfg)
+            raise AutoPrintOff("auto print is off")
+        reason = self._reserve(cfg, enforce_spacing=not manual)
         if reason is not None:
             raise PrinterRateLimited(f"print rate limited: {reason}")
         try:
@@ -96,7 +111,7 @@ class Printer:
         self._writer.stop()
 
     # -- internals -----------------------------------------------------
-    def _reserve(self, cfg: dict[str, Any]) -> str | None:
+    def _reserve(self, cfg: dict[str, Any], *, enforce_spacing: bool) -> str | None:
         """Reserve a print slot, or return the reason it is blocked."""
         now = self._monotonic()
         with self._lock:
@@ -105,7 +120,8 @@ class Printer:
                 self._print_times.popleft()
             spacing = int(cfg["min_print_spacing_seconds"])
             if (
-                spacing > 0
+                enforce_spacing
+                and spacing > 0
                 and self._last_print_mono is not None
                 and now - self._last_print_mono < spacing
             ):

@@ -152,6 +152,7 @@ function buildCard(module) {
   actions.append(save, run, download);
 
   const error = make("p", "card-error", "");
+  const note = make("p", "card-note", "");
   const details = make("details");
   details.append(make("summary", "", "Debug output"));
   details.append(make("h3", "", "Latest receipt"));
@@ -161,12 +162,12 @@ function buildCard(module) {
   const logs = make("ul", "logs");
   details.append(logs);
 
-  root.append(head, badges, fields, actions, error, details);
+  root.append(head, badges, fields, actions, error, note, details);
   modulesEl.append(root);
 
   const entry = {
     root, title, desc, enabled, badge, meta, interval,
-    fieldEntries, save, run, download, error, output, logs, module, busy: false,
+    fieldEntries, save, run, download, error, note, output, logs, module, busy: false,
   };
   cards.set(module.id, entry);
 
@@ -194,6 +195,7 @@ function buildCard(module) {
         method: "POST", body: {},
       });
       if (!result.ok) showBanner(`${module.name}: ${result.error}`);
+      else if (result.print_skipped) showBanner(`${module.name}: not printed (${result.print_skipped})`);
       await refresh();
     });
   });
@@ -253,6 +255,7 @@ function updateCard(entry, module) {
     setValueIfIdle(item.input, value);
   }
   entry.error.textContent = runtime.print_error || runtime.last_error || "";
+  entry.note.textContent = runtime.print_skipped ? `Not printed: ${runtime.print_skipped}` : "";
   entry.output.textContent = module.output.text || "No output yet.";
   entry.download.href = `/api/output/${encodeURIComponent(module.id)}`;
   entry.logs.replaceChildren();

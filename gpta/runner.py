@@ -13,7 +13,13 @@ from .config import ConfigStore
 from .errors import AlreadyRunning, ModuleStuck, ModuleTimeout, NotFound
 from .module_api import Block, Cache, Module, ModuleContext
 from .outputs import OutputStore
-from .printing import Printer, PrinterDisabled, PrinterError, PrinterRateLimited
+from .printing import (
+    AutoPrintOff,
+    Printer,
+    PrinterDisabled,
+    PrinterError,
+    PrinterRateLimited,
+)
 from .renderer import render_receipt
 
 log = logging.getLogger("gpta.runner")
@@ -50,6 +56,8 @@ class ModuleRuntime:
     run_count: int = 0
     running: bool = False
     print_error: str | None = None
+    # Why the last successful run was not printed, when the printer is on.
+    print_skipped: str | None = None
     consecutive_failures: int = 0
 
 
@@ -179,9 +187,10 @@ class ModuleRunner:
                 runtime.last_ok = True
                 runtime.last_error = None
                 runtime.print_error = None
+                runtime.print_skipped = None
                 runtime.consecutive_failures = 0
             module_log(f"fetched {len(blocks)} block(s)", "info", module_id)
-            printed = self._auto_print(module_id, lines)
+            printed = self._auto_print(module_id, lines, manual=trigger == "manual")
         except Exception as exc:
             error = str(exc)
             module_log(f"run failed: {error}", "error", module_id)
@@ -190,6 +199,7 @@ class ModuleRunner:
                 runtime.last_ok = False
                 runtime.last_error = error
                 runtime.print_error = None
+                runtime.print_skipped = None
                 runtime.consecutive_failures += 1
         finally:
             with self._lock:
@@ -203,26 +213,39 @@ class ModuleRunner:
                 )
 
         result: dict[str, Any] = {"ok": error is None, "printed": printed}
+        with self._lock:
+            result["print_skipped"] = self._runtime[module_id].print_skipped
         if error is not None:
             result["error"] = error
         result["runtime"] = self.runtime_snapshot(module_id)
         return result
 
-    def _auto_print(self, module_id: str, lines: list[str]) -> bool:
+    def _auto_print(self, module_id: str, lines: list[str], *, manual: bool) -> bool:
+        """Print a run's receipt if printing is on; record why not otherwise."""
         try:
-            self.printer.submit(lines, module_id, auto=True)
-        except PrinterDisabled:
+            self.printer.submit(lines, module_id, auto=True, manual=manual)
+        except AutoPrintOff as exc:
+            self._set_print_state(module_id, skipped=str(exc))
             return False
+        except PrinterDisabled:
+            return False  # simulator-only mode; nothing to report
         except PrinterRateLimited as exc:
             module_log(f"print skipped: {exc}", "info", module_id)
+            self._set_print_state(module_id, skipped=str(exc))
             return False
         except PrinterError as exc:
-            with self._lock:
-                self._runtime[module_id].print_error = str(exc)
+            self._set_print_state(module_id, error=str(exc))
             return False
-        with self._lock:
-            self._runtime[module_id].print_error = None
+        self._set_print_state(module_id)
         return True
+
+    def _set_print_state(
+        self, module_id: str, *, error: str | None = None, skipped: str | None = None
+    ) -> None:
+        with self._lock:
+            runtime = self._runtime[module_id]
+            runtime.print_error = error
+            runtime.print_skipped = skipped
 
     def _fetch_with_timeout(self, module: Module, ctx: ModuleContext) -> Any:
         holder: dict[str, Any] = {}
@@ -306,6 +329,7 @@ class ModuleRunner:
                 "run_count": runtime.run_count,
                 "running": runtime.running,
                 "print_error": runtime.print_error,
+                "print_skipped": runtime.print_skipped,
                 "next_due_seconds": next_due,
                 "consecutive_failures": runtime.consecutive_failures,
                 "effective_interval_seconds": interval,
