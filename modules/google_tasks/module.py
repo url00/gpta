@@ -58,7 +58,7 @@ def _access_token(ctx: ModuleContext, credentials: dict) -> str:
     return token
 
 
-def _pick_list(ctx: ModuleContext, items: list[dict], wanted: str) -> tuple[str, str]:
+def _pick_list(items: list[dict], wanted: str) -> tuple[str, str]:
     if wanted and wanted != "@default":
         for item in items:
             if item.get("id") == wanted:
@@ -118,7 +118,7 @@ class GoogleTasksModule(Module):
         lists = ctx.http.get_json(LISTS_URL, headers=headers)
         items = lists.get("items", []) if isinstance(lists, dict) else []
         list_id, list_title = _pick_list(
-            ctx, items, str(ctx.options.get("task_list_id") or "@default")
+            items, str(ctx.options.get("task_list_id") or "@default")
         )
         if not list_id:
             return [Block("TASKS", ("No task lists found.",))]

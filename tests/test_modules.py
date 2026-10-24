@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 from datetime import UTC, datetime
@@ -7,9 +8,18 @@ from pathlib import Path
 from gpta import DEFAULT_MODULES_DIR
 from gpta.module_api import Cache, FetchError, ModuleContext
 from gpta.registry import discover
-from modules.google_tasks.module import LISTS_URL, TASKS_URL, TOKEN_URL
-from modules.hackernews.module import ITEM as HN_ITEM
-from modules.hackernews.module import TOP_STORIES
+
+# Use the module objects the registry loaded, rather than importing
+# modules.<id>.module a second time under another name.
+MODULES = discover(DEFAULT_MODULES_DIR)
+
+
+def source(module_id):
+    return sys.modules[type(MODULES[module_id]).__module__]
+
+
+HN = source("hackernews")
+GT = source("google_tasks")
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
 
@@ -52,7 +62,7 @@ def make_ctx(module_id, http, tmp, limits=None, options=None):
 class ModuleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.modules = discover(DEFAULT_MODULES_DIR)
+        cls.modules = MODULES
 
     def test_affirmations(self):
         module = self.modules["affirmations"]
@@ -73,8 +83,8 @@ class ModuleTests(unittest.TestCase):
         recent = int(NOW.timestamp()) - 86400
         http = FakeHttp(
             {
-                TOP_STORIES: [1, 2, 3],
-                HN_ITEM.format(1): {
+                HN.TOP_STORIES: [1, 2, 3],
+                HN.ITEM.format(1): {
                     "id": 1,
                     "type": "story",
                     "title": "One",
@@ -83,7 +93,7 @@ class ModuleTests(unittest.TestCase):
                     "descendants": 3,
                     "url": "https://one.example",
                 },
-                HN_ITEM.format(2): {
+                HN.ITEM.format(2): {
                     "id": 2,
                     "type": "story",
                     "title": "Two",
@@ -91,7 +101,7 @@ class ModuleTests(unittest.TestCase):
                     "time": recent,
                     "descendants": 4,
                 },
-                HN_ITEM.format(3): {
+                HN.ITEM.format(3): {
                     "id": 3,
                     "type": "story",
                     "title": "Old",
@@ -159,9 +169,9 @@ class ModuleTests(unittest.TestCase):
     def test_google_tasks(self):
         http = FakeHttp(
             {
-                TOKEN_URL: {"access_token": "token"},
-                LISTS_URL: {"items": [{"id": "list1", "title": "My Tasks"}]},
-                TASKS_URL.format("list1", "false"): {
+                GT.TOKEN_URL: {"access_token": "token"},
+                GT.LISTS_URL: {"items": [{"id": "list1", "title": "My Tasks"}]},
+                GT.TASKS_URL.format("list1", "false"): {
                     "items": [
                         {
                             "title": "Later",

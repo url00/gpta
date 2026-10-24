@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import secrets
 import urllib.parse
 import xml.etree.ElementTree as ET
 
@@ -48,11 +47,7 @@ def _parse_opds(xml_text: str) -> list[dict]:
 
 def _book_candidates(ctx: ModuleContext) -> list[dict]:
     book_id = ctx.options.get("book_id")
-    if book_id is not None:
-        try:
-            book_id = int(book_id)
-        except (TypeError, ValueError) as exc:
-            raise FetchError("book_id must be an integer") from exc
+    if book_id is not None:  # validated as an int by options_schema
         books = _parse_opds(
             ctx.http.get_text(BOOK_OPDS.format(book_id), max_bytes=2_000_000)
         )
@@ -73,7 +68,6 @@ def _book_candidates(ctx: ModuleContext) -> list[dict]:
     )
     if not books:
         raise FetchError("Gutenberg random feed returned no books")
-    secrets.SystemRandom().shuffle(books)
     return books
 
 

@@ -150,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         "scope": SCOPE,
     }
     fd = os.open(creds_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)  # the mode above only applies when creating the file
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
         handle.write("\n")

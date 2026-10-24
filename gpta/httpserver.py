@@ -214,9 +214,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": str(exc)})
         except BrokenPipeError:  # pragma: no cover - client went away
             pass
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive
             log.exception("unhandled request error")
-            self._json(500, {"error": f"internal error: {exc}"})
+            self._json(500, {"error": "internal error; see the server log"})
 
     # -- responses -----------------------------------------------------
     def _send_headers(

@@ -30,15 +30,8 @@ def ascii_safe(text: object) -> str:
         if not unicodedata.combining(ch)
     )
     value = value.encode("ascii", "replace").decode("ascii")
-    out = []
-    for ch in value:
-        if ch == "\n" or 32 <= ord(ch) <= 126:
-            out.append(ch)
-        elif ch == "\t":
-            out.append(" ")
-        else:
-            out.append(" ")
-    return "".join(out)
+    # Keep newlines; any other control character (tabs included) becomes a space.
+    return "".join(ch if ch == "\n" or 32 <= ord(ch) <= 126 else " " for ch in value)
 
 
 def wrap_text(text: object, width: int) -> list[str]:
