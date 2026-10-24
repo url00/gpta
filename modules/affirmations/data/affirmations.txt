@@ -1,0 +1,32 @@
+# One affirmation per line. Blank lines and lines starting with # are ignored.
+# The module picks one per day, stable for the whole date.
+I can do hard things, one step at a time.
+Progress matters more than perfection.
+I am allowed to rest without earning it.
+My worth is not measured by my productivity.
+I choose to start, even if I start small.
+Today I will be patient with myself.
+I learn something every time I try.
+I can handle whatever today brings.
+It is okay to ask for help.
+Small steps still move me forward.
+I deserve the kindness I give to others.
+I am becoming the person I want to be.
+Mistakes are proof that I am trying.
+I trust myself to figure it out.
+I can let go of what I cannot control.
+My effort today is enough.
+I am curious about what today will teach me.
+I give myself permission to take up space.
+Every day is a fresh start.
+I keep my promises to myself.
+I focus on what I can do right now.
+I am calm, capable, and prepared.
+Good things are on their way to me.
+I can change my mind when I learn more.
+I bring something valuable to the people around me.
+Done is better than perfect.
+I celebrate how far I have come.
+I am stronger than I was yesterday.
+I can hold space for both joy and difficulty.
+Today, I will notice what is going well.

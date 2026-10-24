@@ -1,6 +1,6 @@
-data/
+/data/
 __pycache__/
 *.pyc
 .direnv/
-result
+/result
 *.log
