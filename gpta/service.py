@@ -31,6 +31,14 @@ from .renderer import render_receipt, render_total
 MAX_EMITS_PER_RUN = 100
 MAX_BACKOFF_INTERVAL = 604800
 SCHEDULER_STALE_SECONDS = 10
+LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warn": logging.WARNING,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
 
 
 class NotFound(Exception):
@@ -455,7 +463,7 @@ class Service:
     ) -> tuple[bool, str | None]:
         reason = self._reserve_print(printer_cfg)
         if reason is not None:
-            self._log(f"print skipped: {reason}", "debug", module_id)
+            self._log(f"print skipped: {reason}", "info", module_id)
             return False, None
         try:
             self._printer_writer.print(
@@ -672,13 +680,8 @@ class Service:
 
     def _log(self, message: str, level: str = "info", module: str | None = None) -> None:
         logging.getLogger("gpta.service").log(
-            {
-                "error": logging.ERROR,
-                "warning": logging.WARNING,
-                "debug": logging.DEBUG,
-            }.get(level, logging.INFO),
-            "%s%s",
-            f"[{module}] " if module else "",
+            LOG_LEVELS.get(str(level).lower(), logging.INFO),
+            "%s",
             message,
             extra={"gpta_module": module},
         )

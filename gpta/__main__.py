@@ -40,15 +40,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class ModuleFormatter(logging.Formatter):
+    """Prefix messages logged for a module with ``[module_id]``.
+
+    The module id travels as a record attribute so the console log ring can
+    show it as a separate field; only text sinks need the prefix.
+    """
+
+    def formatMessage(self, record: logging.LogRecord) -> str:
+        module = getattr(record, "gpta_module", None)
+        if module:
+            record.message = f"[{module}] {record.message}"
+        return super().formatMessage(record)
+
+
 def _configure_logging(data_dir: Path) -> None:
     root = logging.getLogger()
     if getattr(root, "_gpta_configured", False):
         return
     root.setLevel(logging.INFO)
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    # GPTA's own debug records reach the console log ring (BusLogHandler);
+    # the stderr and file sinks below stay at INFO. Per-request access logs
+    # stay off so the 2-second UI poll cannot flush the ring.
+    logging.getLogger("gpta").setLevel(logging.DEBUG)
+    logging.getLogger("gpta.httpserver").setLevel(logging.INFO)
+    formatter = ModuleFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     stream = logging.StreamHandler()
+    stream.setLevel(logging.INFO)
     stream.setFormatter(formatter)
     root.addHandler(stream)
     # Under systemd stderr already goes to the journal; avoid a second sink.
@@ -59,6 +77,7 @@ def _configure_logging(data_dir: Path) -> None:
             backupCount=LOG_BACKUP_COUNT,
             encoding="utf-8",
         )
+        file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
     root._gpta_configured = True  # type: ignore[attr-defined]
