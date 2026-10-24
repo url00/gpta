@@ -64,6 +64,21 @@ class ModuleFormatter(logging.Formatter):
         return super().formatMessage(record)
 
 
+def _stderr_is_journal() -> bool:
+    """True when stderr is connected to the systemd journal.
+
+    ``JOURNAL_STREAM`` alone is not enough: child processes of anything
+    systemd started (a desktop session, an IDE) inherit it. systemd's
+    documented check is to compare it with stderr's device and inode.
+    """
+    try:
+        device, inode = (int(part) for part in os.environ["JOURNAL_STREAM"].split(":"))
+        info = os.fstat(2)
+    except (KeyError, ValueError, OSError):
+        return False
+    return (info.st_dev, info.st_ino) == (device, inode)
+
+
 def _configure_logging(data_dir: Path) -> None:
     root = logging.getLogger()
     if getattr(root, "_gpta_configured", False):
@@ -75,21 +90,27 @@ def _configure_logging(data_dir: Path) -> None:
     logging.getLogger("gpta").setLevel(logging.DEBUG)
     logging.getLogger("gpta.httpserver").setLevel(logging.INFO)
     formatter = ModuleFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    stream = logging.StreamHandler()
-    stream.setLevel(logging.INFO)
-    stream.setFormatter(formatter)
-    root.addHandler(stream)
-    # Under systemd stderr already goes to the journal; avoid a second sink.
-    if not os.environ.get("JOURNAL_STREAM"):
-        file_handler = RotatingFileHandler(
-            data_dir / "server.log",
-            maxBytes=LOG_MAX_BYTES,
-            backupCount=LOG_BACKUP_COUNT,
-            encoding="utf-8",
+    sinks: list[logging.Handler] = []
+    if _stderr_is_journal():
+        # Under systemd stderr is the journal, which rotates on its own.
+        sinks.append(logging.StreamHandler())
+    else:
+        sinks.append(
+            RotatingFileHandler(
+                data_dir / "server.log",
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
         )
-        file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(formatter)
-        root.addHandler(file_handler)
+        # Echo to an interactive terminal. When stderr is redirected (start.sh
+        # sends it to server.out, which never rotates) keep it for crashes only.
+        if sys.stderr.isatty():
+            sinks.append(logging.StreamHandler())
+    for sink in sinks:
+        sink.setLevel(logging.INFO)
+        sink.setFormatter(formatter)
+        root.addHandler(sink)
     root._gpta_configured = True  # type: ignore[attr-defined]
 
 

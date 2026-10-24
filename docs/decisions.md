@@ -41,9 +41,10 @@ shared need. Revisit if three or more modules duplicate the same logic.
 ## 3. Logging sinks
 
 **Decision:** the process owns a rotating file sink (`data/server.log`, 1 MB ×
-3). Under systemd (`JOURNAL_STREAM` set), only stderr/journal is used. The
-manual start script redirects early stderr to `data/server.out` so it cannot
-interleave with the rotating handler. Text sinks log at INFO and above; the
+3). When stderr is the systemd journal (`JOURNAL_STREAM` matches stderr's
+device and inode), only the journal is used. Logs are echoed to stderr only
+when it is a terminal; the manual start script redirects stderr to
+`data/server.out`, which therefore holds only crashes and early failures. Text sinks log at INFO and above; the
 in-memory ring shown in the console also keeps GPTA's DEBUG messages.
 
 ## 4. Authentication boundary
