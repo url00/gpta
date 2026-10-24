@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from . import __version__
 from .module_api import FetchError as _ModuleFetchError
 
 log = logging.getLogger("gpta.http")
@@ -40,9 +41,9 @@ class FetchError(_ModuleFetchError):
 
 
 class HttpClient:
-    def __init__(self, timeout: float = 10.0, user_agent: str = "gpta/0.1"):
+    def __init__(self, timeout: float = 10.0, user_agent: str | None = None):
         self.timeout = timeout
-        self.user_agent = user_agent
+        self.user_agent = user_agent or f"gpta/{__version__}"
 
     def _request(
         self,

@@ -6,10 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gpta.config import ConfigStore
+from gpta.errors import AlreadyRunning
 from gpta.logbus import LogBus
 from gpta.module_api import Block, FetchError, Module
 from gpta.printing import PrinterError
-from gpta.errors import AlreadyRunning
 from gpta.service import Service
 
 

@@ -1,0 +1,20 @@
+# Project metadata and tool settings.
+#
+# GPTA runs from a checkout (python3 -m gpta) or the Nix package. It is not
+# pip-installable: modules/ and web/ live beside the gpta package, not in it.
+# This file is the single source of the version number, read by
+# gpta/__init__.py and flake.nix.
+
+[project]
+name = "gpta"
+version = "0.1.0"
+description = "Modular receipt data server and thermal printer simulator"
+requires-python = ">=3.11"
+dependencies = []  # standard library only
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

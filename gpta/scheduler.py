@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .config import ConfigStore
@@ -65,9 +65,9 @@ class Scheduler:
         now = self.monotonic()
         with self._lock:
             self._last_tick_mono = now
-            self._last_tick_at = datetime.fromtimestamp(
-                self.clock(), timezone.utc
-            ).isoformat(timespec="seconds")
+            self._last_tick_at = datetime.fromtimestamp(self.clock(), UTC).isoformat(
+                timespec="seconds"
+            )
         for module_id in sorted(self.runner.registry):
             cfg = self.config.module_config(module_id)
             if not self.runner.is_due(module_id, cfg, now):

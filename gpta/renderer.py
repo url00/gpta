@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import textwrap
 import unicodedata
-from datetime import datetime, timezone
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 
 from .module_api import Block
 
@@ -63,10 +63,10 @@ def wrap_text(text: object, width: int) -> list[str]:
 
 def _utc(value: datetime | None) -> datetime:
     if value is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _truncate(lines: list[str], max_chars: int | None) -> list[str]:

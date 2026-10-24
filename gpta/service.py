@@ -10,7 +10,7 @@ locks only around their own state and never call out while holding them.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -112,7 +112,7 @@ class Service:
 
     def test_printer(self) -> dict[str, Any]:
         width = self.config.snapshot()["printer"]["width"]
-        lines = test_receipt(width, datetime.fromtimestamp(self.clock(), timezone.utc))
+        lines = test_receipt(width, datetime.fromtimestamp(self.clock(), UTC))
         self.printer.submit(lines, "test")
         return {"ok": True, "lines": lines}
 

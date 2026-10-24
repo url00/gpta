@@ -12,7 +12,8 @@ import os
 import queue
 import stat
 import threading
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from ..renderer import to_escpos
 

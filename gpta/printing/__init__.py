@@ -1,4 +1,7 @@
-"""Thermal printer support: print policy (:mod:`.printer`) and device I/O (:mod:`.transport`)."""
+"""Thermal printer support.
+
+:mod:`.printer` holds the print policy; :mod:`.transport` does device I/O.
+"""
 
 from .printer import Printer, PrinterDisabled, PrinterRateLimited, test_receipt
 from .transport import PrinterError, PrinterWriter, send_to_device

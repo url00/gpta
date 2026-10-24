@@ -7,10 +7,12 @@ import logging
 import mimetypes
 import re
 import urllib.parse
+from collections.abc import Iterable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
+from . import __version__
 from .config import ConfigError
 from .errors import AlreadyRunning, NotFound
 from .printing import PrinterDisabled, PrinterError, PrinterRateLimited
@@ -93,7 +95,7 @@ class GptaHTTPServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "gpta/0.1"
+    server_version = f"gpta/{__version__}"
     protocol_version = "HTTP/1.1"
 
     # -- verbs ---------------------------------------------------------

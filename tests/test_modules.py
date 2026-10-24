@@ -1,17 +1,17 @@
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
+from gpta import DEFAULT_MODULES_DIR
 from gpta.module_api import Cache, FetchError, ModuleContext
 from gpta.registry import discover
-from gpta import DEFAULT_MODULES_DIR
-
-from modules.hackernews.module import ITEM as HN_ITEM, TOP_STORIES
 from modules.google_tasks.module import LISTS_URL, TASKS_URL, TOKEN_URL
+from modules.hackernews.module import ITEM as HN_ITEM
+from modules.hackernews.module import TOP_STORIES
 
-NOW = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
 
 
 class FakeHttp:

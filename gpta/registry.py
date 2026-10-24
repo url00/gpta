@@ -47,7 +47,8 @@ def _load_module(child: Path) -> Module:
     ]
     if len(classes) != 1:
         raise RegistryError(
-            f"{module_file} must define exactly one Module subclass, found {len(classes)}"
+            f"{module_file} must define exactly one Module subclass, "
+            f"found {len(classes)}"
         )
     module = classes[0]()
     if not isinstance(module.id, str) or not module.id:

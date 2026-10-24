@@ -10,10 +10,11 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 log = logging.getLogger("gpta.module_api")
 
@@ -166,7 +167,7 @@ MAX_ITEMS_LIMIT: dict[str, Any] = {
 }
 
 
-def limits_schema(module: "Module") -> dict[str, dict[str, Any]]:
+def limits_schema(module: Module) -> dict[str, dict[str, Any]]:
     """The full limits schema for ``module``: core limits plus its own."""
     return {**CORE_LIMITS_SCHEMA, **module.limits_schema}
 

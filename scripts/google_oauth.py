@@ -70,10 +70,10 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 captured["error"] = "missing authorization code"
             body = (
-                "<html><body><h2>Google authorization received</h2>"
-                "<p>You can close this window and return to the terminal.</p>"
-                "</body></html>"
-            ).encode("utf-8")
+                b"<html><body><h2>Google authorization received</h2>"
+                b"<p>You can close this window and return to the terminal.</p>"
+                b"</body></html>"
+            )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))

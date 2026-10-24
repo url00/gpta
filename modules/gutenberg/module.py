@@ -6,7 +6,6 @@ import re
 import secrets
 import urllib.parse
 import xml.etree.ElementTree as ET
-from pathlib import Path
 
 from gpta.module_api import Block, FetchError, Module, ModuleContext
 
@@ -17,6 +16,10 @@ TEXT_URL = BASE + "/cache/epub/{0}/pg{0}.txt"
 START_MARKER = re.compile(r"\*\*\* START OF [^\n]*\*\*\*", re.IGNORECASE)
 END_MARKER = re.compile(r"\*\*\* END OF [^\n]*\*\*\*", re.IGNORECASE)
 OPDS_NS = {"a": "http://www.w3.org/2005/Atom"}
+METADATA_LINE = re.compile(
+    r"^(Title|Author|Release Date|Language|Credits|Character set encoding):",
+    re.IGNORECASE,
+)
 
 
 def _parse_opds(xml_text: str) -> list[dict]:
@@ -103,13 +106,7 @@ def _strip_boilerplate(text: str) -> str:
     paragraphs = []
     for raw in re.split(r"\n\s*\n", body):
         lines = [
-            line
-            for line in raw.splitlines()
-            if not re.match(
-                r"^(Title|Author|Release Date|Language|Credits|Character set encoding):",
-                line.strip(),
-                re.IGNORECASE,
-            )
+            line for line in raw.splitlines() if not METADATA_LINE.match(line.strip())
         ]
         paragraph = " ".join(" ".join(lines).split())
         if not paragraph:

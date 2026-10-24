@@ -7,8 +7,9 @@ import json
 import logging
 import os
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .module_api import CORE_LIMITS_SCHEMA, Module, limits_schema
 

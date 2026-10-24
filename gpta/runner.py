@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .config import ConfigStore
@@ -312,7 +312,7 @@ class ModuleRunner:
 
     # -- helpers -------------------------------------------------------
     def _now(self) -> datetime:
-        return datetime.fromtimestamp(self.clock(), timezone.utc)
+        return datetime.fromtimestamp(self.clock(), UTC)
 
     def _iso_now(self) -> str:
         return self._now().isoformat(timespec="seconds")

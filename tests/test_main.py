@@ -1,10 +1,9 @@
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-import contextlib
-import io
 
 from gpta.__main__ import EXIT_CONFIG, local_url, main
 

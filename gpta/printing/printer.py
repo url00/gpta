@@ -11,8 +11,9 @@ import logging
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
-from typing import Any, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from ..config import ConfigError, ConfigStore
 from ..renderer import ascii_safe
@@ -150,14 +151,12 @@ class Printer:
         )
 
     def _iso_now(self) -> str:
-        return datetime.fromtimestamp(self._clock(), timezone.utc).isoformat(
-            timespec="seconds"
-        )
+        return datetime.fromtimestamp(self._clock(), UTC).isoformat(timespec="seconds")
 
 
 def test_receipt(width: int = 32, now: datetime | None = None) -> list[str]:
     width = max(1, int(width))
-    stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
+    stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%d %H:%M UTC")
     return [
         ascii_safe("GPTA PRINTER TEST").center(width),
         "-" * width,

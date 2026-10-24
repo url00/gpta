@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from gpta.module_api import Block
 from gpta.renderer import (
@@ -19,7 +19,7 @@ class RendererTests(unittest.TestCase):
         self.assertEqual(" ".join(lines), "one two three four five")
 
     def test_receipt_width_and_truncation(self):
-        now = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
         lines = render_receipt(
             "Test Module",
             [Block("HEADING", ("a long line " * 20,))],
