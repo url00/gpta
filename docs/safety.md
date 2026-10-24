@@ -59,8 +59,9 @@ records what happens when things go wrong.
   `/dev/`, and refuses non-character devices.
 - **Bind address:** the default is `127.0.0.1`. Binding elsewhere logs a warning
   about the missing authentication boundary but still starts.
-- **Lock hierarchy:** service lock → config lock. Never take the service lock
-  while holding the config lock.
+- **Lock order:** runner lock → config lock, never the reverse. The printer,
+  scheduler, and output store locks guard only their own state and are never
+  held while calling into another component.
 
 ## Scheduler liveness
 

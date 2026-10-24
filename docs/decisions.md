@@ -1,14 +1,16 @@
 # Decisions
 
-## 4.1 Module isolation tier
+Short records of design choices, why they were made, and when to revisit them.
+
+## 1. Module isolation
 
 **Decision (2026-10-18):** keep modules in-process for first-party, trusted
-code, with the Phase-1 host guards (fetch timeout, single-flight, bounded
+code, protected by host guards (fetch timeout, single-flight, bounded
 output/HTTP/cache/logs, serialized printer, rate limit, backoff, quarantine).
 
-Rationale: the ABI and single egress path make these guards enforceable in one
-place; a subprocess worker would add IPC, packaging, credential, and printer
-complexity now, before a concrete third-party need exists.
+Rationale: the module interface and single egress path make these guards
+enforceable in one place; a subprocess worker would add IPC, packaging,
+credential, and printer complexity before a concrete third-party need exists.
 
 **Revisit when** any of these becomes true:
 
@@ -18,12 +20,14 @@ complexity now, before a concrete third-party need exists.
 
 Required model at that point: a child process per module, `Block` data over
 JSON IPC or stdout, hard kill and restart on timeout, and explicit credential
-passing. That changes the ABI, so decide before module count grows further.
+passing. That changes the module interface, so decide before the number of
+modules grows much further.
 
-## 4.2 Context extension point
+## 2. Context extension point
 
-**Decision:** extend `ModuleContext` with a bounded `cache` helper now (used by
-Gutenberg and available to future modules) instead of adding a `fetch2` API.
+**Decision (2026-10-18):** extend `ModuleContext` with a bounded `cache`
+helper (used by Gutenberg, available to all modules) instead of adding a second
+fetch API.
 
 - Cached storage: `ctx.cache.read_text/write_text`, 50 MB / 30 day LRU cap.
 - Parallel fan-out: stays module-local (Hacker News uses a bounded pool). The
@@ -31,17 +35,18 @@ Gutenberg and available to future modules) instead of adding a `fetch2` API.
 - Credential loading: stays module-local for now; credentials files are
   module-specific and must never be exposed by the HTTP API.
 
-`fetch2` would create two parallel ABIs without evidence of a shared need.
-Revisit if three or more modules duplicate the same logic.
+A second fetch API would create two parallel interfaces without evidence of a
+shared need. Revisit if three or more modules duplicate the same logic.
 
-## 4.3 Logging sink
+## 3. Logging sinks
 
 **Decision:** the process owns a rotating file sink (`data/server.log`, 1 MB ×
 3). Under systemd (`JOURNAL_STREAM` set), only stderr/journal is used. The
 manual start script redirects early stderr to `data/server.out` so it cannot
-interleave with the rotating handler.
+interleave with the rotating handler. Text sinks log at INFO and above; the
+in-memory ring shown in the console also keeps GPTA's DEBUG messages.
 
-## 4.4 Authentication boundary
+## 4. Authentication boundary
 
 **Decision:** GPTA does not implement authentication. Deployments behind an
 authenticating layer (Cloudflare Tunnel with Access/OAuth, an authenticating
@@ -53,3 +58,28 @@ Browser-side defenses are kept because the console may run on a machine that
 is also used for everyday browsing: a `Host` allowlist (`server.allowed_hosts`)
 blocks DNS rebinding, and JSON-only writes plus an `Origin` check block CSRF.
 A tunneled public hostname is added to the allowlist rather than disabling it.
+
+## 5. Config evolution
+
+**Decision (2026-10-24):** loading `config.json` repairs rather than rejects.
+Saved settings are merged field by field with defaults; unknown or invalid
+values are logged and replaced by defaults. API updates stay strict (400).
+Only an unreadable file is fatal, with exit status 78, which the systemd unit
+does not restart on.
+
+Rationale: modules gain and lose options as they evolve. Rejecting the whole
+file made any schema change stop the server from starting.
+
+## 6. Core limits
+
+**Decision (2026-10-24):** `max_chars` is a core limit every module has, since
+the host enforces it. Modules declare only the extra limits they apply (for
+example `max_items`), so the console never shows settings that do nothing.
+
+## 7. Code layout
+
+**Decision (2026-10-24):** `gpta/service.py` is a thin facade over separate
+parts: `runner.py` (module runs), `scheduler.py` (when to run),
+`outputs.py` (latest receipts), and `printing/` (print policy and device I/O).
+Every physical print goes through `printing.Printer.submit()`, so new print
+sources get the same enabled check, rate limits, and failure cut-off.
