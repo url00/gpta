@@ -116,6 +116,26 @@ class KeyValue:
 
 
 @dataclass(frozen=True)
+class Checkbox:
+    """A to-do row: a drawn box, ``text`` beside it, an optional right-aligned
+    ``value`` (e.g. a due date), and an optional small ``note`` underneath."""
+
+    kind: ClassVar[str] = "checkbox"
+
+    text: str
+    checked: bool = False
+    value: str = ""
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        _str(self.text, "Checkbox.text")
+        _str(self.value, "Checkbox.value")
+        _str(self.note, "Checkbox.note")
+        if not isinstance(self.checked, bool):
+            raise TypeError("Checkbox.checked must be true or false")
+
+
+@dataclass(frozen=True)
 class Bar:
     """One bar of a :class:`BarChart`. ``display`` overrides the value text."""
 
@@ -150,10 +170,10 @@ class BarChart:
 
 
 #: Everything a module may return from ``fetch()``.
-Element = Block | Heading | Text | Rule | KeyValue | BarChart
+Element = Block | Heading | Text | Rule | KeyValue | Checkbox | BarChart
 
 KINDS: dict[str, type] = {
-    cls.kind: cls for cls in (Block, Heading, Text, Rule, KeyValue, BarChart)
+    cls.kind: cls for cls in (Block, Heading, Text, Rule, KeyValue, Checkbox, BarChart)
 }
 
 
@@ -165,6 +185,8 @@ def text_of(element: Element) -> str:
         return element.text
     if isinstance(element, KeyValue):
         return element.label + element.value
+    if isinstance(element, Checkbox):
+        return element.text + element.value + element.note
     if isinstance(element, BarChart):
         return element.title + "".join(bar.label for bar in element.bars)
     return ""

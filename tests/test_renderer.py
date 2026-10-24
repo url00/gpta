@@ -2,7 +2,17 @@ import json
 import unittest
 from datetime import UTC, datetime
 
-from gpta.blocks import Bar, BarChart, Block, Heading, KeyValue, Rule, Text, from_dict
+from gpta.blocks import (
+    Bar,
+    BarChart,
+    Block,
+    Checkbox,
+    Heading,
+    KeyValue,
+    Rule,
+    Text,
+    from_dict,
+)
 from gpta.blocks import to_dict as block_to_dict
 from gpta.renderer import (
     TRUNCATED,
@@ -28,6 +38,8 @@ ALL_KINDS = [
     Text("A paragraph of body text that is long enough to wrap.", align="center"),
     Text("small print", size="small", bold=True),
     Rule(),
+    Checkbox("Water the plants", value="Oct 20", note="the big fern too"),
+    Checkbox("A done task with a long title that has to wrap", checked=True),
     Rule(heavy=True),
     KeyValue("Score", "300"),
     BarChart((Bar("alpha", 3), Bar("beta", 10, "ten"), ("gamma", 0)), title="Bars"),
@@ -137,6 +149,22 @@ class ImageTests(unittest.TestCase):
         self.assertLess(bar_width(2), bar_width(5))
         self.assertLess(bar_width(5), bar_width(10))
         self.assertEqual(bar_width(10), bar_width(50))  # clamped
+
+    def test_checkbox_box_is_filled_only_when_checked(self):
+        def ink(checked):
+            receipt = build_receipt("", [Checkbox("x", checked=checked)], now=NOW)
+            image = render_image(receipt, 576).convert("L")
+            return sum(
+                1 for v in image.crop((0, 0, 40, image.height)).getdata() if v == 0
+            )
+
+        self.assertGreater(ink(True), ink(False))
+
+    def test_checkbox_text(self):
+        lines = render_text(
+            Receipt("", (Checkbox("Soon", value="Oct 20", note="n"),), ""), 20
+        )
+        self.assertEqual(lines[:2], ["[ ] Soon      Oct 20", "    n"])
 
     def test_total_image_stacks_with_separator(self):
         one = render_image(build_receipt("A", [Text("a")], now=NOW), 576)

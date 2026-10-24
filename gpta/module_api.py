@@ -18,7 +18,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .blocks import Bar, BarChart, Block, Element, Heading, KeyValue, Rule, Text
+from .blocks import (
+    Bar,
+    BarChart,
+    Block,
+    Checkbox,
+    Element,
+    Heading,
+    KeyValue,
+    Rule,
+    Text,
+)
 
 __all__ = [
     "CORE_LIMITS_SCHEMA",
@@ -27,6 +37,7 @@ __all__ = [
     "BarChart",
     "Block",
     "Cache",
+    "Checkbox",
     "Element",
     "FetchError",
     "Heading",

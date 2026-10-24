@@ -26,6 +26,7 @@ from .blocks import (
     KINDS,
     BarChart,
     Block,
+    Checkbox,
     Element,
     Heading,
     KeyValue,
@@ -309,6 +310,16 @@ def _element_text(element: Any, width: int) -> list[str]:
         return wrap_text(label, width) + [
             line.rjust(width) for line in wrap_text(value, width)
         ]
+    if isinstance(element, Checkbox):
+        box = "[x] " if element.checked else "[ ] "
+        value = clean_text(element.value)
+        room = width - len(box) - (len(value) + 1 if value else 0)
+        wrapped = wrap_text(element.text, max(1, room)) or [""]
+        lines = [box + line for line in wrapped]
+        if value:
+            lines[0] = lines[0].ljust(width - len(value)) + value
+        lines += ["    " + line for line in wrap_text(element.note, width - 4)]
+        return [line.rstrip() for line in lines if line.strip()]
     if isinstance(element, BarChart):
         lines = wrap_text(element.title, width) if element.title else []
         top = _chart_top(element)
@@ -507,6 +518,8 @@ def _layout_element(out: _Layout, element: Any) -> None:
         out.rule(4 if element.heavy else 2)
     elif isinstance(element, KeyValue):
         _layout_key_value(out, element)
+    elif isinstance(element, Checkbox):
+        _layout_checkbox(out, element)
     elif isinstance(element, BarChart):
         _layout_bar_chart(out, element)
     elif isinstance(element, Ruler):
@@ -532,6 +545,56 @@ def _layout_key_value(out: _Layout, element: KeyValue) -> None:
         return
     out.text(label, out.theme.body)
     out.text(value, out.theme.body, bold=True, align="right")
+
+
+def _layout_checkbox(out: _Layout, element: Checkbox) -> None:
+    regular, bold = font(out.theme.body), font(out.theme.body, True)
+    ascent, _descent = regular.getmetrics()
+    box = ascent * 4 // 5
+    indent = box + round(regular.getlength(" ")) * 3 // 2
+    value = clean_text(element.value)
+    value_w = bold.getlength(value) + regular.getlength(" ") if value else 0
+    width = max(1, int(out.inner - indent - value_w))
+    lines = _wrap_px(clean_text(element.text), regular, width) or [""]
+    height = _line_height(regular)
+    for index, line in enumerate(lines):
+        first = index == 0
+
+        def paint(draw, y, line=line, first=first):
+            x = out.left + indent
+            draw.text((x, y), line, font=regular, fill=0)
+            if not first:
+                return
+            top = y + ascent - box
+            draw.rectangle(
+                [out.left, top, out.left + box - 1, top + box - 1], outline=0, width=2
+            )
+            if element.checked:
+                pad = max(3, box // 4)
+                draw.rectangle(
+                    [
+                        out.left + pad,
+                        top + pad,
+                        out.left + box - 1 - pad,
+                        top + box - 1 - pad,
+                    ],
+                    fill=0,
+                )
+            if value:
+                draw.text(
+                    (out.right - bold.getlength(value), y), value, font=bold, fill=0
+                )
+
+        out.add(height, paint)
+    if element.note:
+        small = font(out.theme.small)
+        for line in _wrap_px(clean_text(element.note), small, out.inner - indent):
+            out.add(
+                _line_height(small),
+                lambda draw, y, line=line: draw.text(
+                    (out.left + indent, y), line, font=small, fill=0
+                ),
+            )
 
 
 def _layout_bar_chart(out: _Layout, chart: BarChart) -> None:

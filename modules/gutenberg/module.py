@@ -6,7 +6,15 @@ import re
 import urllib.parse
 import xml.etree.ElementTree as ET
 
-from gpta.module_api import Block, FetchError, Module, ModuleContext
+from gpta.module_api import (
+    Element,
+    FetchError,
+    Heading,
+    Module,
+    ModuleContext,
+    Rule,
+    Text,
+)
 
 BASE = "https://www.gutenberg.org"
 RANDOM_OPDS = BASE + "/ebooks/search.opds/"
@@ -14,6 +22,8 @@ BOOK_OPDS = BASE + "/ebooks/{}.opds"
 TEXT_URL = BASE + "/cache/epub/{0}/pg{0}.txt"
 START_MARKER = re.compile(r"\*\*\* START OF [^\n]*\*\*\*", re.IGNORECASE)
 END_MARKER = re.compile(r"\*\*\* END OF [^\n]*\*\*\*", re.IGNORECASE)
+# Plain-text editions write an em dash as "--"; the receipt font has the real one.
+DOUBLE_HYPHEN = re.compile(r"(?<!-)--(?!-)")
 OPDS_NS = {"a": "http://www.w3.org/2005/Atom"}
 METADATA_LINE = re.compile(
     r"^(Title|Author|Release Date|Language|Credits|Character set encoding):",
@@ -154,7 +164,7 @@ class GutenbergModule(Module):
         },
     }
 
-    def fetch(self, ctx: ModuleContext) -> list[Block]:
+    def fetch(self, ctx: ModuleContext) -> list[Element]:
         candidates = _book_candidates(ctx)
         max_chars = int(ctx.limits["max_chars"])
         selected = None
@@ -190,9 +200,10 @@ class GutenbergModule(Module):
 
         title = selected.get("title") or "(untitled)"
         author = selected.get("author") or ""
-        header = [title]
-        if author:
-            header.append("by " + author)
-        header.append("")
         ctx.emit(f"selected book {selected['id']}: {title}")
-        return [Block("FROM PROJECT GUTENBERG", tuple(header + paragraphs))]
+        blocks: list[Element] = [Heading(title)]
+        if author:
+            blocks.append(Text("by " + author, size="small"))
+        blocks.append(Rule())
+        blocks.extend(Text(DOUBLE_HYPHEN.sub("\u2014", p)) for p in paragraphs)
+        return blocks

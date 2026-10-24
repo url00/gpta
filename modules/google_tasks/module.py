@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 from pathlib import Path
 
-from gpta.module_api import MAX_ITEMS_LIMIT, Block, FetchError, Module, ModuleContext
+from gpta.module_api import (
+    MAX_ITEMS_LIMIT,
+    Checkbox,
+    Element,
+    FetchError,
+    Heading,
+    Module,
+    ModuleContext,
+    Text,
+)
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 LISTS_URL = "https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=100"
@@ -72,6 +82,30 @@ def _pick_list(items: list[dict], wanted: str) -> tuple[str, str]:
     return "", "Google Tasks"
 
 
+MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+
+
+def _due_label(due: object) -> str:
+    """``2026-10-20T00:00:00.000Z`` -> ``Oct 20``; empty if unparseable."""
+    if not isinstance(due, str):
+        return ""
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})", due)
+    if not match or not 1 <= int(match.group(2)) <= 12:
+        return ""
+    return f"{MONTHS[int(match.group(2)) - 1]} {int(match.group(3))}"
+
+
+def _task_element(task: dict) -> Checkbox:
+    notes = task.get("notes")
+    note = notes.strip().splitlines()[0][:80] if isinstance(notes, str) else ""
+    return Checkbox(
+        task.get("title") or "(untitled)",
+        checked=task.get("status") == "completed",
+        value=_due_label(task.get("due")),
+        note=note,
+    )
+
+
 def _sort_key(task: dict):
     due = task.get("due") or ""
     return (due == "", due, task.get("position") or "", task.get("title") or "")
@@ -110,7 +144,7 @@ class GoogleTasksModule(Module):
         },
     }
 
-    def fetch(self, ctx: ModuleContext) -> list[Block]:
+    def fetch(self, ctx: ModuleContext) -> list[Element]:
         credentials = _load_credentials(ctx)
         token = _access_token(ctx, credentials)
         headers = {"Authorization": f"Bearer {token}"}
@@ -121,7 +155,7 @@ class GoogleTasksModule(Module):
             items, str(ctx.options.get("task_list_id") or "@default")
         )
         if not list_id:
-            return [Block("TASKS", ("No task lists found.",))]
+            return [Heading("Tasks"), Text("No task lists found.")]
 
         show_completed = bool(ctx.options.get("show_completed", False))
         url = TASKS_URL.format(
@@ -135,18 +169,9 @@ class GoogleTasksModule(Module):
         tasks.sort(key=_sort_key)
         tasks = tasks[: int(ctx.limits["max_items"])]
 
-        lines: list[str] = []
-        for task in tasks:
-            title = task.get("title") or "(untitled)"
-            lines.append(f"[ ] {title}")
-            due = task.get("due")
-            if isinstance(due, str) and due:
-                lines.append(f"  due {due[:10]}")
-            notes = task.get("notes")
-            if isinstance(notes, str) and notes.strip():
-                first = notes.strip().splitlines()[0]
-                lines.append(f"  {first[:60]}")
-        if not lines:
-            lines = ["No pending tasks."]
+        blocks: list[Element] = [Heading(list_title)]
+        blocks.extend(_task_element(task) for task in tasks)
+        if not tasks:
+            blocks.append(Text("No pending tasks."))
         ctx.emit(f"selected {len(tasks)} tasks from {list_title}")
-        return [Block(f"TASKS - {list_title}", tuple(lines))]
+        return blocks

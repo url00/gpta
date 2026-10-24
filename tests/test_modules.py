@@ -7,7 +7,16 @@ from pathlib import Path
 
 from gpta import DEFAULT_MODULES_DIR
 from gpta.blocks import text_of
-from gpta.module_api import BarChart, Cache, FetchError, Heading, ModuleContext
+from gpta.module_api import (
+    BarChart,
+    Cache,
+    Checkbox,
+    FetchError,
+    Heading,
+    ModuleContext,
+    Rule,
+    Text,
+)
 from gpta.registry import discover
 from gpta.renderer import build_receipt, render_image
 
@@ -147,6 +156,7 @@ class ModuleTests(unittest.TestCase):
             "*** START OF THE PROJECT GUTENBERG EBOOK ALICE ***\n\n"
             "CHAPTER I\n\nCall me Ishmael. This is a sufficiently long paragraph "
             "that survives metadata filtering and becomes receipt content.\n\n"
+            "A second paragraph--with a double hyphen--follows it.\n\n"
             "*** END OF THE PROJECT GUTENBERG EBOOK ALICE ***\n"
         )
         http = FakeHttp(
@@ -168,11 +178,17 @@ class ModuleTests(unittest.TestCase):
             blocks = module.fetch(ctx)
             cached = Path(tmp) / "cache" / "gutenberg" / "11.txt"
             self.assertTrue(cached.is_file())
-        joined = "\n".join(blocks[0].lines)
-        self.assertIn("Call me Ishmael", joined)
-        self.assertIn("Alice", joined)
-        self.assertIn("by Lewis Carroll", joined)
-        self.assertNotIn("START OF THE PROJECT", joined)
+        self.assertEqual(blocks[0], Heading("Alice"))
+        self.assertEqual(blocks[1], Text("by Lewis Carroll", size="small"))
+        self.assertIsInstance(blocks[2], Rule)
+        paragraphs = [block.text for block in blocks[3:]]
+        self.assertIn("Call me Ishmael", paragraphs[0])
+        self.assertEqual(
+            paragraphs[1],
+            "A second paragraph\u2014with a double hyphen\u2014follows it.",
+        )
+        self.assertNotIn("START OF THE PROJECT", " ".join(paragraphs))
+        self.assertEqual(render_image(build_receipt("PG", blocks), 576).width, 576)
 
     def test_google_tasks(self):
         http = FakeHttp(
@@ -227,13 +243,15 @@ class ModuleTests(unittest.TestCase):
                 },
             )
             blocks = module.fetch(ctx)
-        text = "\n".join(blocks[0].lines)
-        self.assertIn("TASKS - My Tasks", blocks[0].title)
-        self.assertIn("Soon", text)
-        self.assertIn("due 2026-10-20", text)
-        self.assertIn("first line", text)
-        self.assertNotIn("Done", text)
-        self.assertLess(text.index("Soon"), text.index("Later"))
+        self.assertEqual(
+            blocks,
+            [
+                Heading("My Tasks"),
+                Checkbox("Soon", value="Oct 20", note="first line"),
+                Checkbox("Later"),
+            ],
+        )
+        self.assertEqual(render_image(build_receipt("GT", blocks), 576).width, 576)
 
     def test_google_tasks_missing_credentials(self):
         module = self.modules["google_tasks"]

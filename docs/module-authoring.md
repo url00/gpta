@@ -93,6 +93,7 @@ wrapped to the paper width; don't pre-wrap or pad it.
 | `Text(text, size="body", bold=False, align="left")` | `size`: `small`, `body`, `large`; `align`: `left`, `center`, `right` | A wrapped paragraph; `\n` starts a new line |
 | `Rule(heavy=False)` | `bool` | A horizontal line (2 dots, or 4 when heavy) |
 | `KeyValue(label, value)` | `str`, `str` | Label on the left, bold value right-aligned; wraps onto two lines if both don't fit |
+| `Checkbox(text, checked=False, value="", note="")` | `str`, `bool`, `str`, `str` | A drawn box (filled when checked), `text` with a hanging indent, bold `value` right-aligned on the first line (e.g. a due date), and `note` in small text underneath |
 | `BarChart(bars, title="", max_value=None)` | `tuple[Bar, ...]`, `str`, number | One row per bar: label, black bar, value. Bars scale to `max_value` (default: the largest value) |
 | `Bar(label, value, display="")` | `str`, number, `str` | `display` replaces the printed number, e.g. `"1.2k"` |
 
