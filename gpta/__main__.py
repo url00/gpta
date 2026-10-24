@@ -7,12 +7,13 @@ import ipaddress
 import logging
 import os
 import signal
+import sys
 import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from . import DEFAULT_MODULES_DIR, DEFAULT_WEB_ROOT, __version__
-from .config import ConfigError, ConfigStore
+from .config import ConfigError, ConfigStore, read_server_settings
 from .http import HttpClient
 from .httpserver import create_server
 from .logbus import BusLogHandler, LogBus
@@ -28,13 +29,22 @@ EXIT_CONFIG = 78
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gpta", description=__doc__)
-    parser.add_argument("--host", help="listen address (default from config)")
-    parser.add_argument("--port", type=int, help="listen port (default from config)")
+    parser.add_argument(
+        "--host", help="listen address (overrides server.host in config.json)"
+    )
+    parser.add_argument(
+        "--port", type=int, help="listen port (overrides server.port in config.json)"
+    )
     parser.add_argument("--data-dir", help="data directory (default: ./data)")
     parser.add_argument("--modules-dir", help="module directory override")
     parser.add_argument("--web-root", help="web asset directory override")
     parser.add_argument(
         "--no-scheduler", action="store_true", help="serve the UI without scheduling"
+    )
+    parser.add_argument(
+        "--print-url",
+        action="store_true",
+        help="print the local URL the server will answer on, then exit",
     )
     parser.add_argument("--version", action="version", version=f"gpta {__version__}")
     return parser
@@ -92,12 +102,37 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def local_url(host: str, port: int) -> str:
+    """A URL for reaching ``host:port`` from this machine."""
+    if host in ("", "0.0.0.0"):
+        host = "127.0.0.1"
+    elif host == "::":
+        host = "::1"
+    if ":" in host:
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
+def _print_url(data_dir: Path, args: argparse.Namespace) -> int:
+    try:
+        server = read_server_settings(data_dir / "config.json")
+    except ConfigError as exc:
+        print(f"gpta: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    host = args.host or server["host"]
+    port = args.port if args.port is not None else server["port"]
+    print(local_url(host, port))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     data_dir = Path(
         args.data_dir or os.environ.get("GPTA_DATA_DIR") or (Path.cwd() / "data")
     ).expanduser().resolve()
+    if args.print_url:
+        return _print_url(data_dir, args)
     modules_dir = (
         Path(args.modules_dir).expanduser().resolve()
         if args.modules_dir

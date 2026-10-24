@@ -310,6 +310,26 @@ def _normalise_printer(raw: Any) -> dict[str, Any]:
     return result
 
 
+def read_server_settings(path: Path) -> dict[str, Any]:
+    """Read only the ``server`` section of a config file, with defaults.
+
+    Used by the control scripts (``gpta --print-url``) without loading
+    modules. Invalid values fall back to defaults silently; the server
+    itself logs them at startup.
+    """
+    raw: Any = {}
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        pass
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"cannot read {path}: {exc}") from exc
+    section = raw.get("server") if isinstance(raw, dict) else None
+    return _tolerant_section(
+        _normalise_server, DEFAULT_SERVER, section, "server", lambda _msg: None
+    )
+
+
 class ConfigStore:
     """Owns the merged configuration and persists it atomically."""
 

@@ -1,10 +1,12 @@
 PYTHON ?= python3
-PORT ?= 8787
+# Extra server flags, e.g. make dev ARGS="--port 9000". Host and port
+# otherwise come from data/config.json.
+ARGS ?=
 
 .PHONY: dev test start stop restart install-systemd
 
 dev:
-	$(PYTHON) -m gpta --port $(PORT)
+	$(PYTHON) -m gpta $(ARGS)
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v

@@ -42,7 +42,9 @@ python3 -m gpta --port 8787
 ```
 
 Open <http://127.0.0.1:8787>. Data is written under `./data` by default; set
-`GPTA_DATA_DIR` to override.
+`GPTA_DATA_DIR` to override. The listen address comes from `server.host` and
+`server.port` in `data/config.json`; `--host`/`--port` override it for one run.
+The scripts below read the same settings (via `gpta --print-url`).
 
 Scripts:
 

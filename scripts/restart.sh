@@ -12,7 +12,7 @@ else
 fi
 
 if wait_for_health; then
-  echo "restarted at http://${HOST}:${PORT}"
+  echo "restarted at $(server_url)"
 else
   echo "restart completed but health check failed" >&2
   exit 1

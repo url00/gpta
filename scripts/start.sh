@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/common.sh"
 if unit_registered; then
   as_root systemctl start "$UNIT_NAME"
   if wait_for_health; then
-    echo "started systemd unit $UNIT_NAME at http://${HOST}:${PORT}"
+    echo "started systemd unit $UNIT_NAME at $(server_url)"
     exit 0
   fi
   echo "unit $UNIT_NAME started but health check failed" >&2
@@ -24,11 +24,11 @@ fi
 # EXEC intentionally word-splits to support "python -m gpta". The server writes
 # its own rotated log to data/server.log; server.out captures pre-logging
 # failures such as interpreter errors.
-nohup $EXEC --data-dir "$DATA_DIR" --host "$HOST" --port "$PORT" >>"$DATA_DIR/server.out" 2>&1 &
+nohup $EXEC --data-dir "$DATA_DIR" >>"$DATA_DIR/server.out" 2>&1 &
 pid=$!
 echo "$pid" >"$PID_FILE"
 if wait_for_health; then
-  echo "started pid $pid at http://${HOST}:${PORT} (log: $DATA_DIR/server.log)"
+  echo "started pid $pid at $(server_url) (log: $DATA_DIR/server.log)"
 else
   echo "server failed to become healthy; recent log:" >&2
   tail -n 40 "$DATA_DIR/server.out" >&2 || true

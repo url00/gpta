@@ -11,8 +11,6 @@ fi
 EXEC="${GPTA_EXEC:-$PYTHON_ABS -m gpta}"
 UNIT_NAME="${GPTA_UNIT_NAME:-gpta}"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}.service"
-HOST="${GPTA_HOST:-127.0.0.1}"
-PORT="${GPTA_PORT:-8787}"
 PID_FILE="$DATA_DIR/server.pid"
 
 as_root() {
@@ -27,10 +25,18 @@ unit_registered() {
   systemctl cat --no-pager "$UNIT_NAME" >/dev/null 2>&1
 }
 
+# Host and port come from data/config.json (server.host / server.port), the
+# same place the server reads them. EXEC intentionally word-splits.
+server_url() {
+  # shellcheck disable=SC2086
+  $EXEC --data-dir "$DATA_DIR" --print-url
+}
+
 wait_for_health() {
-  local i
+  local i url
+  url="$(server_url)"
   for i in $(seq 1 20); do
-    if curl -fsS "http://${HOST}:${PORT}/api/state" >/dev/null 2>&1; then
+    if curl -fsS "${url}/api/state" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.25
