@@ -386,7 +386,43 @@ THEMES = {
 }
 
 
-def theme_for(width_px: int) -> Theme:
+#: Text sizes offered for one-off prints (Instant, web pages): the body size
+#: in px on 80 mm paper. Everything else on the receipt scales with it.
+PRINT_SIZES = {
+    "tiny": 12,
+    "small": 16,
+    "compact": 20,
+    "body": 24,
+    "large": 30,
+    "huge": 36,
+}
+# Smallest font drawn after scaling; below this, glyphs stop being legible.
+MIN_FONT_PX = 11
+
+
+def print_scale(size: str) -> float:
+    """The scale factor for a :data:`PRINT_SIZES` name."""
+    return PRINT_SIZES[size] / THEMES[576].body
+
+
+def theme_for(width_px: int, scale: float = 1.0) -> Theme:
+    theme = _base_theme(width_px)
+    if scale == 1.0:
+        return theme
+
+    def px(value: int) -> int:
+        return max(MIN_FONT_PX, round(value * scale))
+
+    return Theme(
+        small=px(theme.small),
+        body=px(theme.body),
+        large=px(theme.large),
+        title=px(theme.title),
+        margin=theme.margin,
+    )
+
+
+def _base_theme(width_px: int) -> Theme:
     fitting = [width for width in THEMES if width <= width_px]
     return THEMES[max(fitting) if fitting else min(THEMES)]
 
@@ -446,9 +482,9 @@ Paint = Callable[[ImageDraw.ImageDraw, int], None]
 class _Layout:
     """Stacks rows top to bottom, then paints them onto one image."""
 
-    def __init__(self, width: int):
+    def __init__(self, width: int, scale: float = 1.0):
         self.width = width
-        self.theme = theme_for(width)
+        self.theme = theme_for(width, scale)
         self.left = self.theme.margin
         self.right = width - self.theme.margin
         self.inner = self.right - self.left
@@ -647,10 +683,13 @@ def _layout_ruler(out: _Layout) -> None:
     out.add(32, paint)
 
 
-def render_image(receipt: Receipt, width_px: int) -> Image.Image:
-    """``receipt`` as a 1-bit image ``width_px`` dots wide (0 = black)."""
+def render_image(receipt: Receipt, width_px: int, scale: float = 1.0) -> Image.Image:
+    """``receipt`` as a 1-bit image ``width_px`` dots wide (0 = black).
+
+    ``scale`` multiplies every font size (see :func:`print_scale`).
+    """
     with _RENDER_LOCK:
-        out = _Layout(int(width_px))
+        out = _Layout(int(width_px), scale)
         theme = out.theme
         if receipt.title:
             out.text(receipt.title.upper(), theme.title, bold=True, align="center")

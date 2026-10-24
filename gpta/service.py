@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__, reader
-from .blocks import SIZES, Text, from_dict, text_of, to_dict
+from .blocks import Text, from_dict, to_dict
 from .config import PAPERS, ConfigStore
 from .errors import InvalidRequest, NotFound
 from .http import HttpClient
@@ -26,8 +26,10 @@ from .outputs import OutputStore
 from .printing import Printer, PrinterWriter
 from .registry import describe
 from .renderer import (
+    PRINT_SIZES,
     Receipt,
     build_receipt,
+    print_scale,
     render_image,
     render_text,
     test_receipt,
@@ -41,18 +43,24 @@ from .state import StateStore
 INSTANT_MAX_CHARS = 5000
 
 
+def print_size(body: dict) -> float:
+    """The font scale for ``body["size"]``, one of :data:`PRINT_SIZES`."""
+    size = body.get("size", "body")
+    if size not in PRINT_SIZES:
+        raise InvalidRequest(f"size must be one of {', '.join(PRINT_SIZES)}")
+    return print_scale(size)
+
+
 def instant_receipt(body: Any) -> Receipt:
-    """A one-off receipt of pasted ``text`` at ``size``: no header or footer."""
+    """A one-off receipt of pasted ``text``: no header or footer."""
     if not isinstance(body, dict):
         raise InvalidRequest("body must be an object")
-    text, size = body.get("text"), body.get("size", "body")
+    text = body.get("text")
     if not isinstance(text, str) or not text.strip():
         raise InvalidRequest("text must be a non-empty string")
     if len(text) > INSTANT_MAX_CHARS:
         raise InvalidRequest(f"text is longer than {INSTANT_MAX_CHARS} characters")
-    if size not in SIZES:
-        raise InvalidRequest(f"size must be one of {', '.join(SIZES)}")
-    return Receipt(title="", elements=(Text(text.strip("\n"), size=size),), stamp="")
+    return Receipt(title="", elements=(Text(text.strip("\n")),), stamp="")
 
 
 #: Longest article text the reader keeps; the rest is cut with a marker.
@@ -160,37 +168,54 @@ class Service:
 
     def instant_preview(self, body: Any) -> dict[str, Any]:
         """The image an instant print would produce, as a PNG data URL."""
-        width_px = _paper(self.config.snapshot())["width_px"]
-        image = render_image(instant_receipt(body), width_px)
+        receipt = instant_receipt(body)
+        image = render_image(receipt, self._width_px(), print_size(body))
         return {"png": _png_url(image), "height_px": image.height}
 
     def instant_print(self, body: Any) -> dict[str, Any]:
         receipt = instant_receipt(body)
-        width_px = _paper(self.config.snapshot())["width_px"]
-        self.printer.submit(render_image(receipt, width_px), "instant", manual=True)
+        image = render_image(receipt, self._width_px(), print_size(body))
+        self.printer.submit(image, "instant", manual=True)
         module_log(f"instant print: {len(receipt.elements[0].text)} characters")
         return {"ok": True}
 
     def reader_fetch(self, body: Any) -> dict[str, Any]:
-        """Fetch a web page and return it as reader-mode receipt blocks.
+        """Fetch a web page and return part of it as reader-mode blocks.
 
-        The blocks go back to the console, which sends them to
-        :meth:`reader_print`, so what prints is exactly what was previewed.
+        ``offset`` (0-based) picks where in the article text the part starts;
+        each part holds at most :data:`READER_MAX_CHARS` characters, and
+        ``next_offset`` says where the following part starts (None when this
+        part reaches the end). The blocks go back to the console, which sends
+        them to :meth:`reader_print`, so what prints is what was previewed.
         """
-        url = body.get("url") if isinstance(body, dict) else None
+        if not isinstance(body, dict):
+            raise InvalidRequest("body must be an object")
+        scale = print_size(body)
+        offset = body.get("offset", 0)
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise InvalidRequest("offset must be a whole number of 0 or more")
         try:
-            page = self.reader_fetcher(url)
+            page = self.reader_fetcher(body.get("url"))
             article = reader.extract(page.html, page.url)
         except reader.ReaderError as exc:
             raise InvalidRequest(str(exc)) from exc
-        receipt = self._reader_receipt(article.elements(), READER_MAX_CHARS)
-        module_log(f"reader fetched {page.url}")
-        image = render_image(receipt, _paper(self.config.snapshot())["width_px"])
+        part = reader.window(article.body, offset, READER_MAX_CHARS)
+        if not part.body:
+            raise InvalidRequest(
+                f"the article has only {part.total:,} characters; "
+                "nothing is left after that offset"
+            )
+        receipt = self._reader_receipt(article.elements(part))
+        module_log(f"reader fetched {page.url} from character {part.start}")
+        image = render_image(receipt, self._width_px(), scale)
         return {
             "title": article.title,
             "url": page.url,
             "blocks": [to_dict(element) for element in receipt.elements],
-            "chars": sum(len(text_of(element)) for element in receipt.elements),
+            "start": part.start,
+            "end": part.end,
+            "total": part.total,
+            "next_offset": part.end if part.end < part.total else None,
             "png": _png_url(image),
             "height_px": image.height,
         }
@@ -201,21 +226,26 @@ class Service:
             raise InvalidRequest("nothing to print; fetch a page first")
         if len(raw) > READER_MAX_BLOCKS:
             raise InvalidRequest(f"at most {READER_MAX_BLOCKS} blocks can be printed")
+        scale = print_size(body)
         try:
             elements = [from_dict(item) for item in raw]
         except ValueError as exc:
             raise InvalidRequest(f"invalid block: {exc}") from exc
-        # The preview was already cut to the limit; the slack covers the
-        # header and the truncation marker.
+        # A fetched part holds READER_MAX_CHARS of article text; the slack
+        # covers its header and footer. Anything longer did not come from a
+        # fetch and is cut.
         receipt = self._reader_receipt(elements, READER_MAX_CHARS + 2000)
-        width_px = _paper(self.config.snapshot())["width_px"]
-        self.printer.submit(render_image(receipt, width_px), "reader", manual=True)
+        image = render_image(receipt, self._width_px(), scale)
+        self.printer.submit(image, "reader", manual=True)
         module_log(f"reader print: {len(elements)} blocks")
         return {"ok": True}
 
-    def _reader_receipt(self, elements: list, max_chars: int) -> Receipt:
+    def _reader_receipt(self, elements: list, max_chars: int | None = None) -> Receipt:
         now = datetime.fromtimestamp(self.clock(), UTC)
         return build_receipt("", elements, max_chars, now)
+
+    def _width_px(self) -> int:
+        return _paper(self.config.snapshot())["width_px"]
 
     # -- snapshots -----------------------------------------------------
     def snapshot(self) -> dict[str, Any]:

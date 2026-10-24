@@ -676,44 +676,78 @@ function bindInstant() {
 }
 
 // ---- reader mode -----------------------------------------------------
+// Long pages come in parts of up to 8000 characters. "Start at character"
+// is 1-based for people; the API's offset is 0-based.
 const readerUrl = document.getElementById("reader-url");
+const readerSize = document.getElementById("reader-size");
+const readerStart = document.getElementById("reader-start");
 const readerImg = document.getElementById("reader-img");
 const readerEmpty = document.getElementById("reader-empty");
 const readerMeta = document.getElementById("reader-meta");
 const readerNote = document.getElementById("reader-note");
 const readerPrint = document.getElementById("reader-print");
-let readerBlocks = null; // what the preview shows; printed as-is
+const readerNext = document.getElementById("reader-next");
+let readerPage = null; // the fetched part the preview shows; printed as-is
+
+function readerStartOffset() {
+  const value = Math.floor(Number(readerStart.value));
+  return Number.isFinite(value) && value > 1 ? value - 1 : 0;
+}
+
+function showReaderPage(page) {
+  readerPage = page;
+  readerImg.src = page.png;
+  readerImg.hidden = false;
+  readerEmpty.hidden = true;
+  readerPrint.disabled = false;
+  readerNext.hidden = page.next_offset === null;
+  const fmt = (n) => n.toLocaleString();
+  const span = page.start === 0 && page.next_offset === null
+    ? `${fmt(page.total)} characters`
+    : `characters ${fmt(page.start + 1)}–${fmt(page.end)} of ${fmt(page.total)}`;
+  const length = (page.height_px / 80).toFixed(0); // 8 dots per mm
+  readerMeta.textContent = `${page.title || page.url} · ${span} · about ${length} cm of paper`;
+}
 
 function bindReader() {
   const fetchButton = document.getElementById("reader-fetch");
-  const fetchPage = () => busy(fetchButton, async () => {
+  const fetchPage = (button = fetchButton) => busy(button, async () => {
     const url = readerUrl.value.trim();
     if (!url) throw new Error("Paste a page URL first.");
     readerMeta.textContent = "Fetching...";
     readerNote.textContent = "";
     try {
-      const page = await api("/api/reader/fetch", { method: "POST", body: { url } });
-      readerBlocks = page.blocks;
-      readerImg.src = page.png;
-      readerImg.hidden = false;
-      readerEmpty.hidden = true;
-      readerPrint.disabled = false;
-      const length = (page.height_px / 8 / 10).toFixed(0); // 8 dots per mm
-      readerMeta.textContent = `${page.title || page.url} · ${page.chars} characters · about ${length} cm of paper`;
+      showReaderPage(await api("/api/reader/fetch", {
+        method: "POST",
+        body: { url, offset: readerStartOffset(), size: readerSize.value },
+      }));
     } catch (error) {
       readerMeta.textContent = "";
       throw error;
     }
   });
-  fetchButton.addEventListener("click", fetchPage);
+  fetchButton.addEventListener("click", () => fetchPage());
   readerUrl.addEventListener("keydown", (event) => {
     if (event.key === "Enter") fetchPage();
   });
+  // A new link starts from the beginning.
+  readerUrl.addEventListener("change", () => { readerStart.value = "1"; });
+  // Re-fetch so the preview matches the new size (only after a fetch).
+  readerSize.addEventListener("change", () => { if (readerPage) fetchPage(); });
+  readerNext.addEventListener("click", () => {
+    if (!readerPage || readerPage.next_offset === null) return;
+    readerStart.value = String(readerPage.next_offset + 1);
+    fetchPage(readerNext);
+  });
   readerPrint.addEventListener("click", () => {
     busy(readerPrint, async () => {
-      if (!readerBlocks) throw new Error("Fetch a page first.");
-      await api("/api/reader/print", { method: "POST", body: { blocks: readerBlocks } });
-      readerNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.`;
+      if (!readerPage) throw new Error("Fetch a page first.");
+      await api("/api/reader/print", {
+        method: "POST",
+        body: { blocks: readerPage.blocks, size: readerSize.value },
+      });
+      const more = readerPage.next_offset === null ? "" : " Use Next part to continue.";
+      readerNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.${more}`;
       await refresh();
     });
   });

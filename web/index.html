@@ -34,10 +34,12 @@
         <div class="instant-controls">
           <label class="field">Size
             <select id="instant-size">
-              <option value="small">Small</option>
-              <option value="body" selected>Normal</option>
-              <option value="large">Large</option>
-              <option value="huge">Huge</option>
+              <option value="tiny">Tiny (12px)</option>
+              <option value="small">Small (16px)</option>
+              <option value="compact">Compact (20px)</option>
+              <option value="body" selected>Normal (24px)</option>
+              <option value="large">Large (30px)</option>
+              <option value="huge">Huge (36px)</option>
             </select>
           </label>
           <span id="instant-count" class="meta">0 / 5000</span>
@@ -64,6 +66,21 @@
           <input id="reader-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://example.com/article">
           <button id="reader-fetch" type="button">Fetch</button>
         </div>
+        <div class="reader-options">
+          <label class="field">Size
+            <select id="reader-size">
+              <option value="tiny">Tiny (12px)</option>
+              <option value="small">Small (16px)</option>
+              <option value="compact">Compact (20px)</option>
+              <option value="body" selected>Normal (24px)</option>
+              <option value="large">Large (30px)</option>
+              <option value="huge">Huge (36px)</option>
+            </select>
+          </label>
+          <label class="field" title="Long pages print in parts of up to 8000 characters">Start at character
+            <input id="reader-start" type="number" inputmode="numeric" min="1" step="1" value="1">
+          </label>
+        </div>
         <p id="reader-meta" class="meta"></p>
         <div class="paper">
           <img id="reader-img" alt="Web page print preview" hidden>
@@ -71,6 +88,7 @@
         </div>
         <div class="actions">
           <button id="reader-print" type="button" disabled>Print page</button>
+          <button id="reader-next" type="button" class="secondary" hidden>Next part</button>
         </div>
         <p id="reader-note" class="card-note"></p>
       </section>

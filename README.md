@@ -153,9 +153,9 @@ limits.
 | POST | `/api/modules/<id>/run` | Run now (prints if auto-print is on) |
 | PATCH | `/api/printer` | Update printer settings |
 | POST | `/api/instant/preview` | Image of `{"text", "size"}` as an instant print would draw it (`png` data URL) |
-| POST | `/api/instant/print` | Print `{"text", "size"}` once; `size` is `small`, `body`, `large` or `huge`, text up to 5000 characters |
-| POST | `/api/reader/fetch` | Fetch `{"url"}` and return it reader-mode style: `title`, `url`, `blocks`, `chars`, `png` preview. Public http(s) sites only; at most 8000 characters are kept |
-| POST | `/api/reader/print` | Print `{"blocks"}` from a fetch, exactly as previewed |
+| POST | `/api/instant/print` | Print `{"text", "size"}` once; text up to 5000 characters. `size` (here and for web pages) is `tiny`, `small`, `compact`, `body`, `large` or `huge`: 12–36 px body text |
+| POST | `/api/reader/fetch` | Fetch `{"url", "offset", "size"}` reader-mode style. Returns one part of up to 8000 characters starting at `offset` (0-based, cut on word boundaries) as `blocks` plus a `png` preview, with `start`, `end`, `total` and `next_offset` (null on the last part). Public http(s) sites only |
+| POST | `/api/reader/print` | Print `{"blocks", "size"}` from a fetch, exactly as previewed |
 | POST | `/api/printer/test` | Print a test page |
 
 Writes need a JSON body (`{}` or empty is fine). Errors: 400 invalid request or

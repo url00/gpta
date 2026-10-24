@@ -160,6 +160,18 @@ class ImageTests(unittest.TestCase):
 
         self.assertGreater(ink(True), ink(False))
 
+    def test_print_scale(self):
+        from gpta.renderer import PRINT_SIZES, print_scale, theme_for
+
+        receipt = build_receipt("", [Text("hello world " * 20)], now=NOW)
+        heights = [
+            render_image(receipt, 576, print_scale(size)).height for size in PRINT_SIZES
+        ]
+        self.assertEqual(heights, sorted(heights))
+        self.assertEqual(len(set(heights)), len(heights))
+        self.assertEqual(theme_for(576, print_scale("body")), theme_for(576))
+        self.assertGreaterEqual(theme_for(384, print_scale("tiny")).small, 11)
+
     def test_checkbox_text(self):
         lines = render_text(
             Receipt("", (Checkbox("Soon", value="Oct 20", note="n"),), ""), 20

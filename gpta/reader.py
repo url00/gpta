@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
 from . import __version__
-from .blocks import Element, Heading, Rule, Text
+from .blocks import Element, Heading, Rule, Text, size_of
 
 MAX_PAGE_BYTES = 3_000_000
 MAX_REDIRECTS = 5
@@ -450,6 +450,83 @@ def _emit(node: Node, out: list[Element], title: str) -> None:
 
 
 @dataclass(frozen=True)
+class Part:
+    """A window of an article's body, for printing a long page in parts."""
+
+    body: tuple[Element, ...]
+    start: int  # first character, 0-based
+    end: int  # one past the last character
+    total: int
+
+    @property
+    def complete(self) -> bool:
+        return self.start == 0 and self.end >= self.total
+
+
+def window(body: tuple[Element, ...], start: int, limit: int) -> Part:
+    """The body from character ``start``, at most ``limit`` characters long.
+
+    Characters are counted as in ``max_chars`` (:func:`gpta.blocks.size_of`).
+    Cuts land on word boundaries, so consecutive parts (each starting at the
+    previous part's ``end``) print every word exactly once. A start inside a
+    word moves forward to the next word.
+    """
+    total = sum(size_of(element) for element in body)
+    start = min(max(0, int(start)), total)
+    stop = start + max(1, int(limit))
+    out: list[Element] = []
+    first = None  # where the part really starts, after snapping
+    end = start
+    pos = 0
+    for element in body:
+        size = size_of(element)
+        lo, hi = pos, pos + size
+        pos = hi
+        if hi <= start:
+            continue
+        if lo >= stop:
+            break
+        if not isinstance(element, (Text, Heading)) or (lo >= start and hi <= stop):
+            if lo < start:  # an uncuttable element straddling the start
+                continue
+            out.append(element)
+            first = lo if first is None else first
+            end = hi
+            continue
+        text = element.text
+        a, b = max(0, start - lo), min(size, stop - lo)
+        if a > 0:  # begin at the next word
+            space = re.search(r"\s", text[a - 1 :])
+            if space is None:
+                continue
+            a += space.start()
+        if b < size:  # end after the last whole word
+            space = max(text.rfind(" ", a, b + 1), text.rfind("\n", a, b + 1))
+            if space > a:
+                b = space
+        piece = text[a:b].strip()
+        if piece:
+            first = lo + a if first is None else first
+            if a > 0:
+                piece = "…" + piece
+            if b < size:
+                piece += "…"
+            out.append(_replace_text(element, piece))
+        # Step over the space the cut landed on, so the next part (which
+        # starts at ``end``) begins exactly on a word.
+        end = lo + b + (1 if b < size and text[b].isspace() else 0)
+        if b < size:
+            break
+    return Part(tuple(out), start if first is None else first, max(end, start), total)
+
+
+def _replace_text(element: Text | Heading, text: str) -> Text | Heading:
+    if isinstance(element, Heading):
+        return Heading(text)
+    return Text(text, element.size, element.bold, element.align)
+
+
+@dataclass(frozen=True)
 class Article:
     title: str
     site: str
@@ -457,16 +534,33 @@ class Article:
     url: str
     body: tuple[Element, ...]
 
-    def elements(self) -> list[Element]:
-        """The article as receipt blocks: a header, then the body."""
+    def elements(self, part: Part | None = None) -> list[Element]:
+        """The article as receipt blocks: a header, then the body.
+
+        With ``part``, only that window of the body, and the header and
+        footer say which characters it covers and where the next part starts.
+        """
         head: list[Element] = [Heading(self.title or self.site or self.url)]
         site = "" if self.site.casefold() == self.title.casefold() else self.site
         credit = " · ".join(part for part in (self.byline, site) if part)
         if credit:
             head.append(Text(credit, size="small"))
         head.append(Text(self.url, size="small"))
-        head.append(Rule(heavy=True))
-        return head + list(self.body)
+        if part is None or part.complete:
+            return [*head, Rule(heavy=True), *(part.body if part else self.body)]
+        span = f"characters {part.start + 1:,}–{part.end:,} of {part.total:,}"
+        head.append(Text(span, size="small", bold=True))
+        tail: list[Element] = []
+        if part.end < part.total:
+            tail = [
+                Rule(),
+                Text(
+                    f"Continues: next part starts at character {part.end + 1:,}",
+                    size="small",
+                    align="center",
+                ),
+            ]
+        return [*head, Rule(heavy=True), *part.body, *tail]
 
 
 TITLE_SEPARATORS = re.compile(r"\s+[|–—·:-]\s+")

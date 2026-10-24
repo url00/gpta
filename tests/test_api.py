@@ -363,7 +363,41 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(result["url"], "https://blog.example/walk")
         self.assertTrue(result["png"].startswith("data:image/png;base64,"))
         self.assertEqual(result["blocks"][0], {"kind": "heading", "text": "A walk"})
-        self.assertGreater(result["chars"], 20)
+        self.assertEqual((result["start"], result["next_offset"]), (0, None))
+        self.assertEqual(result["end"], result["total"])
+
+        # A long article comes in parts; each fetch says where the next starts.
+        words = " ".join(f"word{i:05d}" for i in range(2000))  # 19999 chars
+        long_html = f"<html><body><article><p>{words}</p></article></body></html>"
+        self.service.reader_fetcher = lambda url: Page(
+            "https://blog.example/l", long_html
+        )
+        texts, offset, parts = [], 0, 0
+        while offset is not None:
+            status, body, _ = self.request(
+                "POST",
+                "/api/reader/fetch",
+                {"url": "x", "offset": offset, "size": "tiny"},
+            )
+            self.assertEqual(status, 200, body)
+            part = json.loads(body)
+            self.assertEqual(part["start"], offset)
+            self.assertLessEqual(part["end"] - part["start"], 8000)
+            blocks = part["blocks"]
+            body = blocks[blocks.index({"kind": "rule", "heavy": True}) + 1]
+            texts.append(body["text"].strip("…"))
+            offset, parts = part["next_offset"], parts + 1
+        self.assertEqual(parts, 3)
+        self.assertEqual(" ".join(texts).split(), words.split())
+        for bad in (
+            {"url": "x", "offset": -1},
+            {"url": "x", "offset": "5"},
+            {"url": "x", "offset": 10**6},
+            {"url": "x", "size": "giant"},
+        ):
+            status, _, _ = self.request("POST", "/api/reader/fetch", bad)
+            self.assertEqual(status, 400, bad)
+        self.service.reader_fetcher = fetcher
 
         status, body, _ = self.request(
             "POST", "/api/reader/fetch", {"url": "https://bad.example/"}
@@ -382,6 +416,7 @@ class ApiTests(unittest.TestCase):
             {"blocks": []},
             {"blocks": [{"kind": "nope"}]},
             {"blocks": "x"},
+            {"blocks": result["blocks"], "size": "giant"},
         ):
             status, _, _ = self.request("POST", "/api/reader/print", bad)
             self.assertEqual(status, 400, bad)
