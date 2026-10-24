@@ -270,7 +270,9 @@ function updatePrinter() {
   setIfIdle(document.getElementById("printer-auto"), printer.auto_print);
   setValueIfIdle(document.getElementById("printer-width"), printer.width);
   setValueIfIdle(document.getElementById("printer-device"), printer.device);
-  const bits = [printer.enabled ? "physical printing enabled" : "simulator only"];
+  setValueIfIdle(document.getElementById("printer-queue"), printer.cups_queue);
+  const target = printer.cups_queue ? `CUPS queue ${printer.cups_queue}` : printer.device;
+  const bits = [printer.enabled ? `printing to ${target}` : "simulator only"];
   if (printer.last_print_at) bits.push(`last print ${printer.last_print_at}`);
   if (printer.disabled_reason) bits.push(printer.disabled_reason);
   if (printer.last_error) bits.push(`error: ${printer.last_error}`);
@@ -379,6 +381,7 @@ function bindPrinterControls() {
           auto_print: document.getElementById("printer-auto").checked,
           width: Number(document.getElementById("printer-width").value),
           device: document.getElementById("printer-device").value,
+          cups_queue: document.getElementById("printer-queue").value.trim(),
         },
       });
       await refresh();

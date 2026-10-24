@@ -57,6 +57,10 @@ records what happens when things go wrong.
 - **Printer device:** configuration is restricted to normalised paths under
   `/dev/`; the transport resolves symlinks, requires the target to stay under
   `/dev/`, and refuses non-character devices.
+- **CUPS queue:** the queue name is restricted to CUPS name characters and
+  passed to `lp`/`lpstat`/`cancel` as a separate argument (no shell). A job
+  still unfinished at the write deadline is cancelled so it cannot print
+  after being reported as failed.
 - **Bind address:** the default is `127.0.0.1`. Binding elsewhere logs a warning
   about the missing authentication boundary but still starts.
 - **Lock order:** runner lock → config lock, never the reverse. The printer,

@@ -37,10 +37,11 @@ class RendererTests(unittest.TestCase):
         self.assertEqual(render_total([], 10), ["No output from enabled modules."])
 
     def test_escpos_bytes(self):
-        data = to_escpos(["hello"], feed_lines=2, cut=True)
+        data = to_escpos(["hello", "last"], feed_lines=2, cut=True)
         self.assertTrue(data.startswith(b"\x1b@"))
-        self.assertTrue(data.endswith(b"\x1dV\x00"))
-        self.assertIn(b"hello\n\n", data)
+        # Feed to the cutter, then cut (GS V 65 0), after every line is printed.
+        self.assertEqual(data, b"\x1b@hello\nlast\n\n\n\x1dV\x41\x00")
+        self.assertEqual(to_escpos(["x"], cut=False), b"\x1b@x\n")
 
 
 if __name__ == "__main__":

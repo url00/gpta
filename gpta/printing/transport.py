@@ -1,17 +1,24 @@
-"""ESC/POS printer transport over a Linux device node.
+"""ESC/POS printer transport: a Linux device node or a raw CUPS queue.
 
 All physical writes go through :class:`PrinterWriter`. A single daemon thread
-owns the device, which serialises writes from the scheduler and HTTP threads.
-Callers wait for completion with a deadline, so a jammed device degrades to a
+owns the printer, which serialises writes from the scheduler and HTTP threads.
+Callers wait for completion with a deadline, so a jammed printer degrades to a
 ``PrinterError`` instead of blocking the request or scheduler thread forever.
+
+With ``printer.cups_queue`` set, the ESC/POS bytes go to that queue through
+``lp -o raw`` (CUPS's client tools, so no Python dependency). This is the way
+to print when CUPS owns the USB printer and there is no ``/dev/usb/lp*``.
 """
 
 from __future__ import annotations
 
 import os
 import queue
+import re
 import stat
+import subprocess
 import threading
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -22,15 +29,94 @@ class PrinterError(Exception):
     pass
 
 
+CUPS_COMMAND_TIMEOUT = 10
+CUPS_POLL_SECONDS = 0.5
+
+
 def _escpos_bytes(lines: Sequence[str], config: dict[str, Any]) -> bytes:
     return to_escpos(
         lines,
-        feed_lines=int(config.get("feed_lines", 3)),
+        feed_lines=int(config.get("feed_lines", 0)),
         cut=bool(config.get("cut", True)),
     )
 
 
 def send_to_device(lines: Sequence[str], config: dict[str, Any]) -> None:
+    """Print ``lines`` on the configured printer (CUPS queue or device)."""
+    if config.get("cups_queue"):
+        _send_to_cups(lines, config)
+    else:
+        _send_to_device_node(lines, config)
+
+
+def _run(args: list[str], data: bytes | None = None) -> str:
+    try:
+        result = subprocess.run(
+            args,
+            input=data,
+            capture_output=True,
+            timeout=CUPS_COMMAND_TIMEOUT,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise PrinterError(
+            f"{args[0]} not found; install the CUPS client tools"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise PrinterError(
+            f"{args[0]} did not finish within {CUPS_COMMAND_TIMEOUT}s"
+        ) from exc
+    output = result.stdout.decode("utf-8", "replace")
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip() or output.strip()
+        raise PrinterError(f"{args[0]} failed: {detail}")
+    return output
+
+
+def _queue_stopped(queue_name: str) -> str | None:
+    """The reason a CUPS queue is not printing, or None if it is accepting."""
+    status = _run(["lpstat", "-p", queue_name])
+    if re.search(r"\bdisabled\b", status):
+        return " ".join(status.split())
+    return None
+
+
+def _send_to_cups(lines: Sequence[str], config: dict[str, Any]) -> None:
+    queue_name = str(config["cups_queue"])
+    # Finish (or cancel) before the writer's deadline so the caller gets
+    # this function's error message rather than a generic timeout.
+    deadline = time.monotonic() + max(
+        1.0, float(config.get("write_timeout_seconds", 30)) - 1.0
+    )
+    stopped = _queue_stopped(queue_name)
+    if stopped:
+        raise PrinterError(f"CUPS queue {queue_name} is stopped: {stopped}")
+    output = _run(
+        ["lp", "-d", queue_name, "-o", "raw", "-t", "gpta", "-"],
+        _escpos_bytes(lines, config),
+    )
+    match = re.search(r"request id is (\S+)", output)
+    if not match:
+        raise PrinterError(f"unexpected lp output: {output.strip()!r}")
+    job_id = match.group(1)
+    while True:
+        pending = _run(["lpstat", "-o", queue_name]).split()
+        if job_id not in pending:
+            break
+        if time.monotonic() >= deadline:
+            # Never let a job the caller was told failed print later.
+            try:
+                _run(["cancel", job_id])
+            except PrinterError:
+                pass
+            raise PrinterError(f"CUPS job {job_id} not finished in time; cancelled it")
+        time.sleep(CUPS_POLL_SECONDS)
+    stopped = _queue_stopped(queue_name)
+    if stopped:
+        raise PrinterError(f"CUPS job {job_id} failed; queue stopped: {stopped}")
+
+
+def _send_to_device_node(lines: Sequence[str], config: dict[str, Any]) -> None:
     device = config.get("device", "")
     if not device:
         raise PrinterError("no printer device configured")

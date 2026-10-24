@@ -6,6 +6,7 @@ import copy
 import json
 import logging
 import os
+import re
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -25,14 +26,19 @@ DEFAULT_PRINTER = {
     "enabled": False,
     "auto_print": True,
     "device": "/dev/usb/lp0",
+    # When set, print through this CUPS queue instead of the device. The queue
+    # must pass data through unchanged (a "Local Raw Printer" queue).
+    "cups_queue": "",
     "width": 32,
-    "feed_lines": 3,
+    "feed_lines": 0,
     "cut": True,
-    "write_timeout_seconds": 10,
+    "write_timeout_seconds": 30,
     "min_print_spacing_seconds": 30,
     "max_prints_per_hour": 60,
     "failure_threshold": 3,
 }
+
+CUPS_QUEUE_RE = re.compile(r"[A-Za-z0-9_.@-]{0,127}")
 
 MODULE_KEYS = {"enabled", "interval_seconds", "limits", "options"}
 PRINTER_KEYS = set(DEFAULT_PRINTER)
@@ -285,6 +291,12 @@ def _normalise_printer(raw: Any) -> dict[str, Any]:
         raise ConfigError("printer.device must be a path under /dev/")
     if os.path.normpath(device) != device:
         raise ConfigError("printer.device must be a normalised path under /dev/")
+    queue = result["cups_queue"]
+    if not isinstance(queue, str) or not CUPS_QUEUE_RE.fullmatch(queue):
+        raise ConfigError(
+            "printer.cups_queue must be empty or a CUPS queue name "
+            "(letters, digits, '_', '-', '.', '@')"
+        )
     if type(result["width"]) is not int or result["width"] not in (32, 48):
         raise ConfigError("printer.width must be 32 or 48")
     if type(result["feed_lines"]) is not int or not 0 <= result["feed_lines"] <= 10:

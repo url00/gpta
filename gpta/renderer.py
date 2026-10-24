@@ -124,17 +124,25 @@ def render_total(
     return parts
 
 
+ESC_INIT = b"\x1b@"
+# GS V 65 0: feed the paper to the cutter, then cut. The plain cut (GS V 0)
+# cuts wherever the paper is, which on most printers is through the last
+# lines, because the blade sits above the print head.
+ESC_FEED_AND_CUT = b"\x1dV\x41\x00"
+
+
 def to_escpos(
     lines: Sequence[str],
-    feed_lines: int = 3,
+    feed_lines: int = 0,
     cut: bool = True,
 ) -> bytes:
     safe = [ascii_safe(line) for line in lines]
-    body = "\n".join(safe)
     # ascii_safe() already reduced the text to printable ASCII, which every
-    # ESC/POS code page renders identically.
-    data = b"\x1b@" + body.encode("ascii", errors="replace")
+    # ESC/POS code page renders identically. The trailing newline prints the
+    # last line; without it the printer keeps that line in its buffer.
+    body = "".join(line + "\n" for line in safe)
+    data = ESC_INIT + body.encode("ascii", errors="replace")
     data += b"\n" * max(0, int(feed_lines))
     if cut:
-        data += b"\x1dV\x00"
+        data += ESC_FEED_AND_CUT
     return data

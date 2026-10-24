@@ -82,6 +82,14 @@ class ConfigTests(unittest.TestCase):
             ["localhost", "gpta.example.test"],
         )
 
+    def test_cups_queue_validated(self):
+        self.store.update_printer({"cups_queue": "POS-80"})
+        self.assertEqual(self.store.snapshot()["printer"]["cups_queue"], "POS-80")
+        for bad in ("two words", "-o raw;rm", "x" * 200, 5):
+            with self.subTest(queue=bad):
+                with self.assertRaises(ConfigError):
+                    self.store.update_printer({"cups_queue": bad})
+
     def test_print_guard_config_is_validated(self):
         with self.assertRaises(ConfigError):
             self.store.update_printer({"min_print_spacing_seconds": -1})

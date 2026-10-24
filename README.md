@@ -30,7 +30,7 @@ valid JSON stops startup (exit status 78).
 | `server.host`, `server.port` | `127.0.0.1`, `8787` | `--host`/`--port` override for one run |
 | `server.allowed_hosts` | `localhost`, `127.0.0.1`, `::1` | Hostnames the server answers to; add a tunnel's public hostname here |
 | `server.run_timeout_seconds` | `120` | Per-run fetch timeout |
-| `printer.*` | disabled, `/dev/usb/lp0`, 32 columns | Device, width, auto-print, rate limits; see [Printer](#printer) |
+| `printer.*` | disabled, `/dev/usb/lp0`, 32 columns | CUPS queue or device, width, auto-print, rate limits; see [Printer](#printer) |
 | `modules.<id>.*` | per module | `enabled`, `interval_seconds`, `limits`, `options` |
 
 For example, behind a Cloudflare tunnel:
@@ -83,10 +83,21 @@ To write a module, see [docs/module-authoring.md](docs/module-authoring.md).
 
 ## Printer
 
-GPTA writes ESC/POS to a character device under `/dev/` (default
-`/dev/usb/lp0`, usually needing the `lp` group). Text is reduced to printable
-ASCII. With the printer disabled, runs still update the simulator but never
-touch the device.
+GPTA sends ESC/POS text to the printer in one of two ways:
+
+- **CUPS queue** (`printer.cups_queue`, e.g. `POS-80`). Use this when CUPS
+  owns the USB printer and there is no `/dev/usb/lp0`. The queue must be a
+  raw queue (CUPS model "Local Raw Printer") so the bytes reach the printer
+  unchanged; GPTA submits with `lp -o raw` and waits for the job to finish.
+  `lpstat -v` lists queues.
+- **Device node** (`printer.device`, default `/dev/usb/lp0`), used when
+  `cups_queue` is empty. Must be a character device under `/dev/`; usually
+  needs the `lp` group.
+
+Text is reduced to printable ASCII. Each receipt ends with ESC/POS "feed to
+cutter, then cut", so the last lines are never cut off; `printer.feed_lines`
+adds extra blank space before it. Use width 48 for 80 mm paper, 32 for 58 mm.
+With the printer disabled, runs still update the simulator but never print.
 
 Writes are serialized and time-limited. Prints are spaced at least
 `printer.min_print_spacing_seconds` apart (default 30) and capped at
