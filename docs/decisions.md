@@ -74,7 +74,8 @@ file made any schema change stop the server from starting.
 ## 6. Core limits
 
 **Decision (2026-10-24):** `max_chars` is a core limit every module has, since
-the host enforces it. Modules declare only the extra limits they apply (for
+the host enforces it. It counts the characters of the module's blocks (not the
+header and footer the host adds). Modules declare only the extra limits they apply (for
 example `max_items`), so the console never shows settings that do nothing.
 
 ## 7. Code layout
@@ -84,3 +85,29 @@ parts: `runner.py` (module runs), `scheduler.py` (when to run),
 `outputs.py` (latest receipts), and `printing/` (print policy and device I/O).
 Every physical print goes through `printing.Printer.submit()`, so new print
 sources get the same enabled check, rate limits, and failure cut-off.
+
+## 8. Image receipts and the Pillow dependency
+
+**Decision (2026-10-24):** receipts are rendered as 1-bit images and printed
+as ESC/POS raster graphics (`GS v 0`), replacing ASCII text. Pillow becomes
+GPTA's one runtime dependency; until now the runtime was standard library
+only. The font (DejaVu Sans Mono) is vendored in `gpta/fonts/`.
+
+Rationale: text mode limited receipts to the printer's built-in font and code
+page (so Unicode was reduced to ASCII) and could not draw rules, charts,
+QR codes, or pictures. Drawing those needs font rasterisation and image
+encoding; writing that on the standard library would mean a TrueType
+renderer and a PNG encoder of our own. Pillow is mature, packaged by Nix
+(which already provides the dev shell, scripts, and package), and used only
+by the renderer and the raster encoder.
+
+- The raw paths stay (`lp -o raw` and `/dev` device nodes); the CUPS raster
+  driver is not used, so GPTA controls every dot, the bands, and the cut.
+- Modules still return data, not images: small frozen, JSON-serialisable
+  block dataclasses (`gpta/blocks.py`), so receipts can be saved and
+  re-rendered at a new paper width, and the IPC route in decision 1 stays
+  open. `state.json` stores blocks, not PNGs.
+- The preview PNG is the printed image, pixel for pixel.
+
+**Revisit when** the target hardware needs a dependency-free build (Pillow
+not available), or a printer cannot handle `GS v 0` raster data.

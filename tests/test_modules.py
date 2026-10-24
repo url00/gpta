@@ -6,8 +6,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from gpta import DEFAULT_MODULES_DIR
-from gpta.module_api import Cache, FetchError, ModuleContext
+from gpta.blocks import text_of
+from gpta.module_api import BarChart, Cache, FetchError, Heading, ModuleContext
 from gpta.registry import discover
+from gpta.renderer import build_receipt, render_image
 
 # Use the module objects the registry loaded, rather than importing
 # modules.<id>.module a second time under another name.
@@ -75,8 +77,9 @@ class ModuleTests(unittest.TestCase):
                 options={"include_date": True},
             )
             blocks = module.fetch(ctx)
-        self.assertEqual(len(blocks), 1)
-        self.assertIn("2026-10-18", " ".join(blocks[0].lines))
+        self.assertIsInstance(blocks[0], Heading)
+        self.assertIn("2026-10-18", " ".join(map(text_of, blocks)))
+        self.assertGreater(render_image(build_receipt("A", blocks), 576).height, 100)
 
     def test_hackernews_sort_and_window(self):
         old = int(NOW.timestamp()) - 10 * 86400
@@ -120,11 +123,16 @@ class ModuleTests(unittest.TestCase):
                 options={"window_days": 7, "min_score": 0, "scan_limit": 3},
             )
             blocks = module.fetch(ctx)
-        text = "\n".join(blocks[0].lines)
+        text = "\n".join(map(text_of, blocks))
         self.assertIn("Two", text)
         self.assertIn("One", text)
         self.assertNotIn("Old", text)
         self.assertLess(text.index("Two"), text.index("One"))
+        self.assertIn("200 points", text)
+        chart = blocks[-1]
+        self.assertIsInstance(chart, BarChart)
+        self.assertEqual([bar.value for bar in chart.bars], [200, 100])
+        self.assertEqual(render_image(build_receipt("HN", blocks), 384).width, 384)
 
     def test_gutenberg_excerpt_and_cache(self):
         opds = """<?xml version="1.0" encoding="utf-8"?>

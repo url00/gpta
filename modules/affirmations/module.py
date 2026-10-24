@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from gpta.module_api import Block, FetchError, Module, ModuleContext
+from gpta.module_api import Element, FetchError, Heading, Module, ModuleContext, Text
 
 
 class AffirmationsModule(Module):
@@ -29,7 +29,7 @@ class AffirmationsModule(Module):
     def __init__(self) -> None:
         self._data_file = Path(__file__).resolve().parent / "data" / "affirmations.txt"
 
-    def fetch(self, ctx: ModuleContext) -> list[Block]:
+    def fetch(self, ctx: ModuleContext) -> list[Element]:
         try:
             raw = self._data_file.read_text(encoding="utf-8")
         except OSError as exc:
@@ -43,8 +43,11 @@ class AffirmationsModule(Module):
             raise FetchError("affirmation list is empty")
         day = ctx.now.date().isoformat()
         index = int(hashlib.sha256(day.encode("utf-8")).hexdigest(), 16) % len(lines)
-        body = [lines[index]]
-        if ctx.options.get("include_date", True):
-            body.append(f"For {day}")
         ctx.emit(f"selected affirmation {index + 1}/{len(lines)}")
-        return [Block("TODAY'S AFFIRMATION", tuple(body))]
+        blocks: list[Element] = [
+            Heading("Today's affirmation"),
+            Text(lines[index], size="large", align="center"),
+        ]
+        if ctx.options.get("include_date", True):
+            blocks.append(Text(f"For {day}", size="small", align="right"))
+        return blocks

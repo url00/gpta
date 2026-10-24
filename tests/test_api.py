@@ -1,4 +1,5 @@
 import http.client
+import io
 import json
 import tempfile
 import threading
@@ -7,11 +8,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from PIL import Image
+
 from gpta import DEFAULT_MODULES_DIR, DEFAULT_WEB_ROOT
 from gpta.config import ConfigStore
 from gpta.httpserver import create_server
 from gpta.logbus import BusLogHandler, LogBus
+from gpta.module_api import Text
 from gpta.registry import discover
+from gpta.renderer import build_receipt
 from gpta.service import Service
 
 
@@ -99,6 +104,46 @@ class ApiTests(unittest.TestCase):
         status, body, _ = self.request("GET", "/api/output/total")
         self.assertEqual(status, 200)
         self.assertIn(b"DAILY AFFIRMATION", body)
+
+    def png(self, path):
+        status, body, headers = self.request("GET", path)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        return Image.open(io.BytesIO(body))
+
+    def test_png_outputs(self):
+        for path in ("/api/output/affirmations.png", "/api/output/total.png"):
+            status, _, _ = self.request("GET", path)
+            self.assertEqual(status, 404, path)  # nothing has run yet
+        status, _, _ = self.request("GET", "/api/output/nope.png")
+        self.assertEqual(status, 404)
+
+        for module_id in ("affirmations", "gutenberg"):
+            self.request("PATCH", f"/api/modules/{module_id}", {"enabled": True})
+        self.service.outputs.set(
+            "gutenberg",
+            build_receipt("Project Gutenberg", [Text("Call me Ishmael.")]),
+            "2026-10-18T12:00:00+00:00",
+        )
+        self.request("POST", "/api/modules/affirmations/run", {})
+        module = self.png("/api/output/affirmations.png")
+        self.assertEqual(module.size[0], 576)
+        self.assertIn(module.mode, ("1", "L"))
+        total = self.png("/api/output/total.png")
+        self.assertEqual(total.size[0], 576)
+        gutenberg = self.png("/api/output/gutenberg.png")
+        self.assertGreater(total.size[1], module.size[1] + gutenberg.size[1])
+        state = json.loads(self.request("GET", "/api/state")[1])
+        self.assertEqual(state["total"]["module_ids"], ["affirmations", "gutenberg"])
+
+        # Changing the paper re-renders the existing output at the new width.
+        self.request("PATCH", "/api/printer", {"paper": "58mm"})
+        self.assertEqual(self.png("/api/output/affirmations.png").size[0], 384)
+        self.assertEqual(self.png("/api/output/total.png").size[0], 384)
+        status, body, headers = self.request("GET", "/api/output/affirmations")
+        self.assertTrue(headers["Content-Type"].startswith("text/plain"))
+        self.assertTrue(all(len(line) <= 32 for line in body.decode().splitlines()))
 
     def test_validation_and_not_found(self):
         status, _, _ = self.request(
@@ -190,7 +235,7 @@ class ApiTests(unittest.TestCase):
                 conn,
                 "PATCH",
                 "/api/printer",
-                b'{"width": 48}',
+                b'{"paper": "58mm"}',
                 {"Content-Type": "application/json", "Origin": "https://evil.example"},
             )
             self.assertEqual(status, 403)
@@ -198,7 +243,7 @@ class ApiTests(unittest.TestCase):
                 conn,
                 "PATCH",
                 "/api/printer",
-                b'{"width": 48}',
+                b'{"paper": "58mm"}',
                 {
                     "Content-Type": "application/json",
                     "Origin": "https://gpta.example.test",
@@ -235,7 +280,7 @@ class ApiTests(unittest.TestCase):
                 conn,
                 "PATCH",
                 "/api/printer",
-                b'{"width": 48}',
+                b'{"paper": "58mm"}',
                 {"Content-Type": "text/plain"},
             )
             self.assertEqual(status, 400)
@@ -245,13 +290,20 @@ class ApiTests(unittest.TestCase):
             conn.close()
 
     def test_printer_config_roundtrip(self):
+        status, body, _ = self.request("GET", "/api/state")
+        printer = json.loads(body)["printer"]
+        self.assertEqual((printer["paper"], printer["width_px"]), ("80mm", 576))
+        self.assertNotIn("width", printer)
         status, body, _ = self.request(
-            "PATCH", "/api/printer", {"width": 48, "auto_print": False}
+            "PATCH", "/api/printer", {"paper": "58mm", "auto_print": False}
         )
         self.assertEqual(status, 200)
         printer = json.loads(body)["printer"]
-        self.assertEqual(printer["width"], 48)
+        self.assertEqual((printer["paper"], printer["width_px"]), ("58mm", 384))
         self.assertFalse(printer["auto_print"])
+        for bad in ({"paper": "A4"}, {"paper": None}, {"width": 48}):
+            status, _, _ = self.request("PATCH", "/api/printer", bad)
+            self.assertEqual(status, 400, bad)
         status, _, _ = self.request("POST", "/api/printer/test", {})
         self.assertEqual(status, 409)
 

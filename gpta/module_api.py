@@ -1,7 +1,8 @@
 """Public module ABI.
 
 Every module lives in ``modules/<id>/module.py`` and defines exactly one
-subclass of :class:`Module` whose ``id`` matches its folder name.
+subclass of :class:`Module` whose ``id`` matches its folder name. ``fetch()``
+returns receipt blocks, defined in :mod:`gpta.blocks` and re-exported here.
 """
 
 from __future__ import annotations
@@ -12,10 +13,30 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from .blocks import Bar, BarChart, Block, Element, Heading, KeyValue, Rule, Text
+
+__all__ = [
+    "CORE_LIMITS_SCHEMA",
+    "MAX_ITEMS_LIMIT",
+    "Bar",
+    "BarChart",
+    "Block",
+    "Cache",
+    "Element",
+    "FetchError",
+    "Heading",
+    "KeyValue",
+    "Module",
+    "ModuleContext",
+    "Rule",
+    "Text",
+    "limits_schema",
+]
 
 log = logging.getLogger("gpta.module_api")
 
@@ -137,15 +158,6 @@ class Cache:
 
 
 @dataclass(frozen=True)
-class Block:
-    """A logical section of a receipt."""
-
-    title: str
-    lines: tuple[str, ...]
-    meta: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class ModuleContext:
     """Everything a module may use during a fetch."""
 
@@ -202,7 +214,7 @@ class Module:
 
     options_schema: dict[str, dict[str, Any]] = {}
 
-    def fetch(self, ctx: ModuleContext) -> list[Block]:  # pragma: no cover - abstract
+    def fetch(self, ctx: ModuleContext) -> list[Element]:  # pragma: no cover
         raise NotImplementedError
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

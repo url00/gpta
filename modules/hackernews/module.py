@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from gpta.module_api import MAX_ITEMS_LIMIT, Block, FetchError, Module, ModuleContext
+from gpta.module_api import (
+    MAX_ITEMS_LIMIT,
+    Bar,
+    BarChart,
+    Element,
+    FetchError,
+    Heading,
+    KeyValue,
+    Module,
+    ModuleContext,
+    Rule,
+    Text,
+)
 
 TOP_STORIES = "https://hacker-news.firebaseio.com/v0/topstories.json"
 ITEM = "https://hacker-news.firebaseio.com/v0/item/{}.json"
@@ -45,7 +57,7 @@ class HackerNewsModule(Module):
         },
     }
 
-    def fetch(self, ctx: ModuleContext) -> list[Block]:
+    def fetch(self, ctx: ModuleContext) -> list[Element]:
         top = ctx.http.get_json(TOP_STORIES)
         if not isinstance(top, list):
             raise FetchError("unexpected topstories response")
@@ -90,10 +102,11 @@ class HackerNewsModule(Module):
         ctx.emit(
             f"selected {len(stories)} stories from {len(candidate_ids)} candidates"
         )
+        blocks: list[Element] = [Heading("Top stories this week")]
         if not stories:
-            return [Block("TOP STORIES THIS WEEK", ("No qualifying stories.",))]
+            return blocks + [Text("No qualifying stories.")]
 
-        lines: list[str] = []
+        bars: list[Bar] = []
         for position, story in enumerate(stories, start=1):
             title = story.get("title") or "(untitled)"
             score = int(story.get("score", 0))
@@ -102,11 +115,10 @@ class HackerNewsModule(Module):
                 story.get("url")
                 or f"https://news.ycombinator.com/item?id={story.get('id')}"
             )
-            lines.extend(
-                [
-                    f"{position}. {title}",
-                    f"   {score} points | {comments} comments",
-                    f"   {url}",
-                ]
-            )
-        return [Block("TOP STORIES THIS WEEK", tuple(lines))]
+            blocks += [
+                Text(f"{position}. {title}", bold=True),
+                KeyValue(f"{score} points", f"{comments} comments"),
+                Text(url, size="small"),
+            ]
+            bars.append(Bar(f"#{position}", score))
+        return blocks + [Rule(), BarChart(tuple(bars), title="Points")]

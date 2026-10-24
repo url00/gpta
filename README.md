@@ -1,17 +1,20 @@
 # GPTA
 
 GPTA is a local web console and background server that gathers data from
-pluggable modules, renders receipt-width text, and optionally prints it on a
-thermal printer. The console controls modules and the printer, shows debug
-logs, and has a simulator that shows exactly what the printer would receive.
+pluggable modules, renders each receipt as an image the width of the paper,
+and optionally prints it on a thermal printer. The console controls modules
+and the printer, shows debug logs, and previews the exact image the printer
+would receive.
 
-The runtime uses **only the Python standard library** (3.11+). Nix provides
-the development shell and an optional packaged executable.
+The runtime is Python 3.11+ with one dependency, **Pillow**, which draws the
+receipts. Nix provides it: the development shell, the scripts, and the
+packaged executable all use the flake's `python3.withPackages (ps: [ps.pillow])`.
+The receipt font (DejaVu Sans Mono, in `gpta/fonts/`) ships with the code.
 
 ## Quick start
 
 ```bash
-python3 -m gpta          # or: nix develop, then python -m gpta
+nix develop -c python -m gpta     # or any python3 that has Pillow: python3 -m gpta
 ```
 
 Open <http://127.0.0.1:8787>. All modules start disabled; enable them in the
@@ -30,7 +33,7 @@ valid JSON stops startup (exit status 78).
 | `server.host`, `server.port` | `127.0.0.1`, `8787` | `--host`/`--port` override for one run |
 | `server.allowed_hosts` | `localhost`, `127.0.0.1`, `::1` | Hostnames the server answers to; add a tunnel's public hostname here |
 | `server.run_timeout_seconds` | `120` | Per-run fetch timeout |
-| `printer.*` | disabled, `/dev/usb/lp0`, 32 columns | CUPS queue or device, width, auto-print, rate limits; see [Printer](#printer) |
+| `printer.*` | disabled, `/dev/usb/lp0`, 80 mm paper | CUPS queue or device, paper size, auto-print, rate limits; see [Printer](#printer) |
 | `modules.<id>.*` | per module | `enabled`, `interval_seconds`, `limits`, `options` |
 
 For example, behind a Cloudflare tunnel:
@@ -48,20 +51,27 @@ For example, behind a Cloudflare tunnel:
 ./scripts/install-systemd.sh [--dry-run]
 ```
 
-The scripts find the server's address with `gpta --print-url`, which reads the
+The scripts run this checkout with the flake's Python (`nix build .#python`,
+linked at `.nix-python` so garbage collection keeps it), or, without Nix, with
+any `python3` that can import Pillow. `GPTA_PYTHON` picks another interpreter;
+`GPTA_EXEC` replaces the whole command (e.g. the packaged `result/bin/gpta`).
+They find the server's address with `gpta --print-url`, which reads the
 same config. `install-systemd.sh` installs `/etc/systemd/system/gpta.service`
 (escalating with `sudo`), enables it, and restarts it when the unit changes;
 `--dry-run` prints the unit only. The unit runs as `$SUDO_USER` (or
 `GPTA_RUN_USER`) and joins the `lp` group when it exists so it can open the
-printer. `GPTA_UNIT_NAME` and `GPTA_EXEC` (e.g. a Nix-built wrapper) override
-the unit name and command.
+printer. Its command is `<checkout>/.nix-python/bin/python3 -m gpta` unless
+`GPTA_PYTHON` or `GPTA_EXEC` says otherwise; `GPTA_UNIT_NAME` overrides the
+unit name.
 
 Logs: `data/server.log` (rotated) for manual starts, the journal under systemd.
 
 Restarts are safe: `data/state.json` records when each module last ran, how
-it went, and its latest receipt, so a restart only runs modules that are due
-(for example, one whose daily run was missed while the server was down runs
-once). Delete the file to make every enabled module run on the next start.
+it went, and its latest receipt (as blocks, re-rendered on load), so a restart
+only runs modules that are due (for example, one whose daily run was missed
+while the server was down runs once). Receipts saved as text by older versions
+show as plain text until the module next runs. Delete the file to make every
+enabled module run on the next start.
 
 ## Modules
 
@@ -88,7 +98,10 @@ To write a module, see [docs/module-authoring.md](docs/module-authoring.md).
 
 ## Printer
 
-GPTA sends ESC/POS text to the printer in one of two ways:
+Each receipt is rendered as a 1-bit image as wide as the paper
+(`printer.paper`: `80mm`, 576 dots, the default; or `58mm`, 384 dots, both at
+203 dpi) and sent as ESC/POS raster graphics (`GS v 0`, in bands of 256
+rows). The console preview is the same image. GPTA sends it in one of two ways:
 
 - **CUPS queue** (`printer.cups_queue`, e.g. `POS-80`). Use this when CUPS
   owns the USB printer and there is no `/dev/usb/lp0`. The queue must be a
@@ -99,10 +112,13 @@ GPTA sends ESC/POS text to the printer in one of two ways:
   `cups_queue` is empty. Must be a character device under `/dev/`; usually
   needs the `lp` group.
 
-Text is reduced to printable ASCII. Each receipt ends with ESC/POS "feed to
-cutter, then cut", so the last lines are never cut off; `printer.feed_lines`
-adds extra blank space before it. Use width 48 for 80 mm paper, 32 for 58 mm.
-With the printer disabled, runs still update the simulator but never print.
+Text keeps its Unicode characters; anything the font has no glyph for prints
+as `�`. Each receipt ends with ESC/POS "feed to cutter, then cut", so the last
+lines are never cut off; `printer.feed_lines` adds extra blank space before
+it. With the printer disabled, runs still update the preview but never print.
+Changing the paper size re-renders the existing previews at the new width.
+The test page shows the font sizes, a ruler with a tick every millimetre
+across the full width (to check the printable edges), and a bar chart.
 
 Writes are serialized and time-limited. Scheduled prints are spaced at least
 `printer.min_print_spacing_seconds` apart (default 30); prints you ask for
@@ -129,9 +145,10 @@ limits.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/state` | Server, printer, modules (config, runtime, latest output), total receipt, quarantined modules |
+| GET | `/api/state` | Server, printer (incl. `paper` and its `width_px`), modules (config, runtime, latest output), total receipt, quarantined modules |
 | GET | `/api/logs?since=N` | Log entries after sequence `N`, plus `next` |
-| GET | `/api/output/<id>`, `/api/output/total` | Plain-text receipt |
+| GET | `/api/output/<id>.png`, `/api/output/total.png` | The receipt image exactly as it prints (`printer.width_px` wide; 404 before any output) |
+| GET | `/api/output/<id>`, `/api/output/total` | The same receipt as plain text, for copying and debugging |
 | PATCH | `/api/modules/<id>` | Update `enabled`, `interval_seconds`, `limits`, `options` |
 | POST | `/api/modules/<id>/run` | Run now (prints if auto-print is on) |
 | PATCH | `/api/printer` | Update printer settings |
@@ -145,22 +162,24 @@ limited.
 ## Development
 
 ```bash
-make test       # python3 -m unittest discover -s tests -v
-make lint       # ruff (in the Nix dev shell)
-make format
-nix build       # packaged executable at ./result/bin/gpta
+nix develop -c make test    # python3 -m unittest discover -s tests -v
+nix develop -c make lint    # ruff
+nix develop -c make format
+nix build                   # packaged executable at ./result/bin/gpta
 ```
 
-Tests use fake HTTP clients and need no network or printer.
+Tests use fake HTTP clients and need no network or printer. `nix build` only
+sees files Git tracks, so `git add` new files first.
 
 | Path | Contents |
 |---|---|
 | `gpta/service.py` | Facade used by the HTTP layer; builds `/api/state` |
 | `gpta/runner.py`, `gpta/scheduler.py` | Running modules; deciding when |
-| `gpta/printing/` | Print policy (`printer.py`) and device I/O (`transport.py`) |
+| `gpta/printing/` | Print policy (`printer.py`), device I/O (`transport.py`), ESC/POS raster encoding (`escpos.py`) |
 | `gpta/config.py`, `gpta/registry.py` | Settings; module discovery and validation |
 | `gpta/httpserver.py`, `gpta/http.py` | Console/API server; outbound HTTP client for modules |
-| `gpta/module_api.py`, `gpta/renderer.py` | Module interface; receipt layout |
+| `gpta/module_api.py`, `gpta/blocks.py` | Module interface; receipt block kinds |
+| `gpta/renderer.py`, `gpta/fonts/` | Receipt layout (image and plain text); the bundled font and its license |
 | `modules/<id>/` | One module per folder |
 | `web/` | Console (plain HTML/CSS/JS, no build step) |
 | `docs/` | [Module authoring](docs/module-authoring.md), [safety](docs/safety.md), [decisions](docs/decisions.md) |

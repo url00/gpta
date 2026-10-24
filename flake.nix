@@ -9,8 +9,12 @@
       version = (builtins.fromTOML (builtins.readFile ./pyproject.toml)).project.version;
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      # Pillow is the one runtime dependency (receipts are rendered images).
+      pythonFor = pkgs: pkgs.python3.withPackages (ps: [ ps.pillow ]);
     in {
       packages = forAllSystems (pkgs: {
+        # The interpreter alone: scripts/ run the checkout with it.
+        python = pythonFor pkgs;
         default = pkgs.stdenvNoCC.mkDerivation {
           pname = "gpta";
           inherit version;
@@ -22,7 +26,7 @@
           installPhase = ''
             mkdir -p $out/lib/gpta $out/bin
             cp -r gpta modules web pyproject.toml $out/lib/gpta/
-            makeWrapper ${pkgs.python3}/bin/python3 $out/bin/gpta \
+            makeWrapper ${pythonFor pkgs}/bin/python3 $out/bin/gpta \
               --add-flags "-m gpta" \
               --set PYTHONPATH "$out/lib/gpta"
           '';
@@ -35,7 +39,7 @@
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.python3 pkgs.ruff pkgs.curl pkgs.git ];
+          packages = [ (pythonFor pkgs) pkgs.ruff pkgs.curl pkgs.git ];
         };
       });
 

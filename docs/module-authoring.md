@@ -1,6 +1,7 @@
 # Module authoring
 
-A module is a data source that returns receipt blocks. Modules run in-process
+A module is a data source that returns receipt blocks; the host lays them
+out as an image and prints it. Modules run in-process
 in the server. The host enforces **time and size** bounds; it does not sandbox
 code.
 
@@ -20,7 +21,16 @@ code.
 ## The module class
 
 ```python
-from gpta.module_api import MAX_ITEMS_LIMIT, Block, FetchError, Module, ModuleContext
+from gpta.module_api import (
+    MAX_ITEMS_LIMIT,
+    Element,
+    FetchError,
+    Heading,
+    KeyValue,
+    Module,
+    ModuleContext,
+    Text,
+)
 
 
 class ExampleModule(Module):
@@ -39,10 +49,14 @@ class ExampleModule(Module):
         "greeting": {"type": "str", "label": "Greeting", "max_length": 40},
     }
 
-    def fetch(self, ctx: ModuleContext) -> list[Block]:
+    def fetch(self, ctx: ModuleContext) -> list[Element]:
         count = ctx.limits["max_items"]
         ctx.emit(f"printing {count} lines", "debug")
-        return [Block("EXAMPLE", tuple([ctx.options["greeting"]] * count))]
+        return [
+            Heading("Example"),
+            *[Text(ctx.options["greeting"]) for _ in range(count)],
+            KeyValue("Lines", str(count)),
+        ]
 ```
 
 - **`defaults`** must contain `enabled`, `interval_seconds` (5-604800),
@@ -63,6 +77,40 @@ class ExampleModule(Module):
 Saved settings are merged field by field with the module's defaults. A newly
 added limit or option takes its default; a removed or now-invalid one is
 dropped with a warning in the log. Renaming an option therefore resets it.
+
+## Receipt blocks
+
+`fetch()` returns a list of blocks, all importable from `gpta.module_api`. The
+host adds a header (the module name) and a footer (the run time) and lays
+everything out on a 1-bit image as wide as the paper (576 dots on 80 mm, 384
+on 58 mm), in DejaVu Sans Mono at three sizes (small, body, large). Text is
+wrapped to the paper width; don't pre-wrap or pad it.
+
+| Block | Fields | Prints |
+|---|---|---|
+| `Block(title, lines, meta={})` | `str`, `tuple[str, ...]`, `dict` | A large bold title over body-text lines; `""` adds a half-line gap |
+| `Heading(text)` | `str` | Large bold text |
+| `Text(text, size="body", bold=False, align="left")` | `size`: `small`, `body`, `large`; `align`: `left`, `center`, `right` | A wrapped paragraph; `\n` starts a new line |
+| `Rule(heavy=False)` | `bool` | A horizontal line (2 dots, or 4 when heavy) |
+| `KeyValue(label, value)` | `str`, `str` | Label on the left, bold value right-aligned; wraps onto two lines if both don't fit |
+| `BarChart(bars, title="", max_value=None)` | `tuple[Bar, ...]`, `str`, number | One row per bar: label, black bar, value. Bars scale to `max_value` (default: the largest value) |
+| `Bar(label, value, display="")` | `str`, number, `str` | `display` replaces the printed number, e.g. `"1.2k"` |
+
+`BarChart` also accepts `(label, value)` tuples in place of `Bar`s. Blocks are
+frozen dataclasses with plain fields, so the host can save them as JSON and
+re-render them later (for example at a new paper width); `Block.meta` is
+saved only if it is JSON-serialisable and never printed. Returning anything
+else from `fetch()` fails the run.
+
+Text keeps its Unicode characters. Characters the font has no glyph for
+(e.g. CJK, emoji) print as `�`; control characters become spaces.
+`max_chars` counts the characters of your blocks' text (titles, lines,
+labels, values) plus one per rule and per bar, not the header and footer. When a receipt is over the limit,
+the block that crosses it is cut short, later blocks are dropped, and
+`[truncated]` is printed.
+
+QR codes and images are not available yet. They will be new block kinds
+alongside these, so existing modules won't change.
 
 ## The context
 
@@ -86,7 +134,7 @@ errors and network failures. Any exception fails the run and triggers backoff.
 | Fetch timeout | `server.run_timeout_seconds` (default 120s) |
 | Single-flight | At most one active run per module |
 | Abandoned workers | At most one timed-out fetch thread per module |
-| Output bound | Receipt truncated to `limits.max_chars` |
+| Output bound | Receipt text truncated to `limits.max_chars` |
 | HTTP body bound | 2 MB per response; JSON raises, text truncates |
 | HTTP timeout | 10s per request (`ctx.http`) |
 | Cache bound | 50 MB / 30 days, LRU eviction (`ctx.cache`) |
@@ -107,7 +155,8 @@ A module **must**:
 - Use `ctx.http` for all network access, so timeouts and body caps apply.
 - Use `ctx.cache` for downloads rather than writing into `data/` directly.
 - Join any thread it starts before returning. Do not spawn subprocesses.
-- Treat input data as untrusted text; the renderer reduces it to ASCII.
+- Treat input data as untrusted text. It is printed literally (blocks have no
+  markup), so it cannot change the layout beyond its own length.
 
 A module **must not**:
 

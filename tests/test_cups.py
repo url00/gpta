@@ -2,7 +2,11 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
+from PIL import Image
+
 from gpta.printing import PrinterError, send_to_device, transport
+
+IMAGE = Image.new("1", (16, 3), 1)
 
 
 class FakeCups:
@@ -46,14 +50,18 @@ class CupsTransportTests(unittest.TestCase):
             patch("gpta.printing.transport.subprocess.run", side_effect=fake),
             patch("gpta.printing.transport.time.sleep"),
         ):
-            send_to_device(["hello"], config)
+            send_to_device(IMAGE, config)
 
     def test_sends_raw_escpos_and_waits_for_job(self):
         fake = FakeCups(polls_pending=2)
         self.run_with(fake)
         lp = next(call for call in fake.calls if call[0] == "lp")
         self.assertEqual(lp, ["lp", "-d", "POS-80", "-o", "raw", "-t", "gpta", "-"])
-        self.assertTrue(fake.printed.startswith(b"\x1b@hello\n"))
+        # ESC @, then one GS v 0 band: 2 bytes per row, 3 rows, all white.
+        self.assertEqual(
+            fake.printed,
+            b"\x1b@\x1dv0\x00\x02\x00\x03\x00" + bytes(6) + b"\x1dV\x41\x00",
+        )
         polls = [call for call in fake.calls if call[:2] == ["lpstat", "-o"]]
         self.assertEqual(len(polls), 3)
 
@@ -84,7 +92,7 @@ class CupsTransportTests(unittest.TestCase):
             "gpta.printing.transport.subprocess.run", side_effect=FileNotFoundError
         ):
             with self.assertRaises(PrinterError) as caught:
-                send_to_device(["hello"], CONFIG)
+                send_to_device(IMAGE, CONFIG)
         self.assertIn("CUPS client tools", str(caught.exception))
 
     def test_lp_failure_reports_stderr(self):
@@ -101,7 +109,7 @@ class CupsTransportTests(unittest.TestCase):
 
     def test_without_queue_uses_device(self):
         with patch.object(transport, "_send_to_device_node") as device:
-            send_to_device(["x"], {"cups_queue": "", "device": "/dev/null"})
+            send_to_device(IMAGE, {"cups_queue": "", "device": "/dev/null"})
         device.assert_called_once()
 
 

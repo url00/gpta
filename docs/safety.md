@@ -59,6 +59,9 @@ records what happens when things go wrong.
 - **Printer device:** configuration is restricted to normalised paths under
   `/dev/`; the transport resolves symlinks, requires the target to stay under
   `/dev/`, and refuses non-character devices.
+- **Printer data:** module text is only ever drawn into the receipt image;
+  the printer receives raster dots plus GPTA's own fixed commands, so text
+  from a source cannot smuggle ESC/POS commands to the printer.
 - **CUPS queue:** the queue name is restricted to CUPS name characters and
   passed to `lp`/`lpstat`/`cancel` as a separate argument (no shell). A job
   still unfinished at the write deadline is cancelled so it cannot print

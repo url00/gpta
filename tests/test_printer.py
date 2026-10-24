@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+
 from gpta.config import ConfigStore
 from gpta.logbus import LogBus
 from gpta.module_api import Block, Module
@@ -31,6 +33,9 @@ class FakeModule(Module):
 
     def fetch(self, ctx):
         return [Block("FAKE", ("hello",))]
+
+
+IMAGE = Image.new("1", (8, 1), 1)
 
 
 class PrinterSafetyTests(unittest.TestCase):
@@ -163,18 +168,35 @@ class PrinterSafetyTests(unittest.TestCase):
         self.assertIn("auto-disabled", printer["disabled_reason"])
         self.assertEqual(printer["last_error"], "offline")
 
+    def test_prints_the_rendered_image_at_paper_width(self):
+        self.enable_printer()
+        for paper, width in (("80mm", 576), ("58mm", 384)):
+            self.store.update_printer({"paper": paper})
+            with self.subTest(paper=paper):
+                with patch("gpta.printing.transport.send_to_device") as send:
+                    self.service.run_module("fake")
+                    self.service.test_printer()
+                run_image, test_image = (c.args[0] for c in send.call_args_list)
+                self.assertEqual((run_image.mode, run_image.width), ("1", width))
+                self.assertEqual(test_image.width, width)
+                # The print is the same picture as the preview.
+                preview = self.service.outputs.image("fake", width)
+                self.assertEqual(run_image.tobytes(), preview.tobytes())
+        job = self.service.snapshot()["printer"]["last_job"]
+        self.assertEqual((job["module"], job["width_px"]), ("test", 384))
+
     def test_device_path_is_restricted(self):
         for device in ("/etc/passwd", "/dev/../etc/passwd"):
             with self.subTest(device=device):
                 with self.assertRaises(PrinterError):
-                    send_to_device(["hello"], {"device": device})
+                    send_to_device(IMAGE, {"device": device})
         if not os.path.isdir("/dev/shm"):
             self.skipTest("/dev/shm unavailable")
         fd, path = tempfile.mkstemp(dir="/dev/shm")
         os.close(fd)
         try:
             with self.assertRaises(PrinterError) as caught:
-                send_to_device(["hello"], {"device": path})
+                send_to_device(IMAGE, {"device": path})
             self.assertIn("not a character device", str(caught.exception))
         finally:
             os.unlink(path)

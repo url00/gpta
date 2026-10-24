@@ -11,12 +11,12 @@ import logging
 import threading
 import time
 from collections import deque
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from PIL import Image
+
 from ..config import ConfigError, ConfigStore
-from ..renderer import ascii_safe
 from .transport import PrinterError, PrinterWriter
 
 log = logging.getLogger("gpta.printing")
@@ -58,13 +58,13 @@ class Printer:
 
     def submit(
         self,
-        lines: Sequence[str],
+        image: Image.Image,
         source: str,
         *,
         auto: bool = False,
         manual: bool = False,
     ) -> None:
-        """Print ``lines`` now, or raise why not.
+        """Print a rendered receipt ``image`` now, or raise why not.
 
         ``source`` is a module id or ``"test"``. ``auto`` marks a module's
         automatic print, which also needs ``printer.auto_print``. ``manual``
@@ -85,11 +85,11 @@ class Printer:
         if reason is not None:
             raise PrinterRateLimited(f"print rate limited: {reason}")
         try:
-            self._writer.print(lines, cfg, timeout=float(cfg["write_timeout_seconds"]))
+            self._writer.print(image, cfg, timeout=float(cfg["write_timeout_seconds"]))
         except PrinterError as exc:
             self._record_failure(cfg, str(exc), source if auto else None)
             raise
-        self._record_success(source, lines)
+        self._record_success(source, image)
 
     def reset_failures(self) -> None:
         """Clear the failure count, e.g. after the operator re-enables printing."""
@@ -133,13 +133,17 @@ class Printer:
             self._last_print_mono = now
         return None
 
-    def _record_success(self, source: str, lines: Sequence[str]) -> None:
+    def _record_success(self, source: str, image: Image.Image) -> None:
         with self._lock:
             self._consecutive_failures = 0
             self._disabled_reason = None
             self._last_print_at = self._iso_now()
             self._last_error = None
-            self._last_job = {"module": source, "lines": list(lines)}
+            self._last_job = {
+                "module": source,
+                "width_px": image.width,
+                "height_px": image.height,
+            }
 
     def _record_failure(
         self, cfg: dict[str, Any], message: str, module: str | None
@@ -168,18 +172,3 @@ class Printer:
 
     def _iso_now(self) -> str:
         return datetime.fromtimestamp(self._clock(), UTC).isoformat(timespec="seconds")
-
-
-def test_receipt(width: int = 32, now: datetime | None = None) -> list[str]:
-    width = max(1, int(width))
-    stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%d %H:%M UTC")
-    return [
-        ascii_safe("GPTA PRINTER TEST").center(width),
-        "-" * width,
-        "",
-        "If you can read this,",
-        "the printer transport works.",
-        "",
-        stamp.center(width),
-        "-" * width,
-    ]

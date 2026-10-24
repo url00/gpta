@@ -38,7 +38,8 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(self.path.is_file())
         snap = self.store.snapshot()
         self.assertFalse(snap["modules"]["echo"]["enabled"])
-        self.assertEqual(snap["printer"]["width"], 32)
+        self.assertEqual(snap["printer"]["paper"], "80mm")
+        self.assertNotIn("width", snap["printer"])
         self.assertEqual(snap["server"]["run_timeout_seconds"], 120)
         self.assertEqual(snap["printer"]["min_print_spacing_seconds"], 30)
         self.assertEqual(snap["printer"]["failure_threshold"], 3)
@@ -61,8 +62,10 @@ class ConfigTests(unittest.TestCase):
             self.store.update_module("echo", {"options": {"nope": 1}})
         with self.assertRaises(ConfigError):
             self.store.update_module("echo", {"unknown": True})
-        with self.assertRaises(ConfigError):
-            self.store.update_printer({"width": 40})
+        for patch in ({"paper": "A4"}, {"paper": 80}, {"width": 48}):
+            with self.subTest(patch=patch), self.assertRaises(ConfigError):
+                self.store.update_printer(patch)
+        self.assertEqual(self.store.update_printer({"paper": "58mm"})["paper"], "58mm")
 
     def test_printer_device_must_stay_under_dev(self):
         for device in ("/etc/passwd", "/dev/../etc/passwd", "/dev", "dev/lp0"):
@@ -136,7 +139,7 @@ class ConfigTests(unittest.TestCase):
             data["modules"]["echo"]["options"]["text"] = "x" * 500
             data["modules"]["echo"]["interval_seconds"] = 1
             data["modules"]["echo"]["enabled"] = True
-            data["printer"]["width"] = 40
+            data["printer"]["paper"] = "A4"
             data["printer"]["feed_lines"] = 5
             data["server"]["bogus"] = True
             data["extra"] = {}
@@ -148,17 +151,34 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg["interval_seconds"], 60)
         self.assertEqual(cfg["options"], {"text": "hello"})
         printer = store.snapshot()["printer"]
-        self.assertEqual(printer["width"], 32)
+        self.assertEqual(printer["paper"], "80mm")
         self.assertEqual(printer["feed_lines"], 5)
         for fragment in (
             "gone",
             "longer than",
             "interval_seconds",
-            "width",
+            "paper",
             "bogus",
             "extra",
         ):
             self.assertIn(fragment, logs)
+
+    def test_old_column_width_is_dropped(self):
+        # Before receipts were images, printer.width was 32 or 48 columns.
+        def mutate(data):
+            del data["printer"]["paper"]
+            data["printer"]["width"] = 32
+            data["printer"]["cut"] = False
+
+        self.write_raw(mutate)
+        store, logs = self.reload()
+        printer = store.snapshot()["printer"]
+        self.assertNotIn("width", printer)
+        self.assertEqual(printer["paper"], "80mm")
+        self.assertFalse(printer["cut"])
+        self.assertIn("unknown key: width", logs)
+        store.update_printer({"paper": "58mm"})
+        self.assertNotIn("width", json.loads(self.path.read_text())["printer"])
 
     def test_unreadable_file_is_fatal(self):
         self.path.write_text("{not json")

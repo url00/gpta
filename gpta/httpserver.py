@@ -54,6 +54,7 @@ ROUTES: list[tuple[str, re.Pattern[str], str]] = [
         ("GET", r"/static/(?P<rel>.+)", "static"),
         ("GET", r"/api/state", "state"),
         ("GET", r"/api/logs", "logs"),
+        ("GET", r"/api/output/(?P<key>[^/]+)\.png", "output_png"),
         ("GET", r"/api/output/(?P<key>[^/]+)", "output"),
         ("PATCH", r"/api/modules/(?P<module_id>[^/]+)", "patch_module"),
         ("POST", r"/api/modules/(?P<module_id>[^/]+)/run", "run_module"),
@@ -159,6 +160,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _h_output(self, key: str) -> None:
         self._text(200, self.server.service.output_text(key))
+
+    def _h_output_png(self, key: str) -> None:
+        data = self.server.service.output_png(key)
+        self._send_headers(200, "image/png", len(data))
+        self.wfile.write(data)
 
     def _h_patch_module(self, module_id: str) -> None:
         module = self.server.service.update_module(module_id, self._body_json)

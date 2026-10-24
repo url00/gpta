@@ -29,13 +29,20 @@ DEFAULT_PRINTER = {
     # When set, print through this CUPS queue instead of the device. The queue
     # must pass data through unchanged (a "Local Raw Printer" queue).
     "cups_queue": "",
-    "width": 32,
+    "paper": "80mm",
     "feed_lines": 0,
     "cut": True,
     "write_timeout_seconds": 30,
     "min_print_spacing_seconds": 30,
     "max_prints_per_hour": 60,
     "failure_threshold": 3,
+}
+
+#: Paper sizes: printable width in dots (203 dpi), and columns for the
+#: plain-text rendering.
+PAPERS = {
+    "80mm": {"width_px": 576, "columns": 48},
+    "58mm": {"width_px": 384, "columns": 32},
 }
 
 CUPS_QUEUE_RE = re.compile(r"[A-Za-z0-9_.@-]{0,127}")
@@ -297,8 +304,8 @@ def _normalise_printer(raw: Any) -> dict[str, Any]:
             "printer.cups_queue must be empty or a CUPS queue name "
             "(letters, digits, '_', '-', '.', '@')"
         )
-    if type(result["width"]) is not int or result["width"] not in (32, 48):
-        raise ConfigError("printer.width must be 32 or 48")
+    if not isinstance(result["paper"], str) or result["paper"] not in PAPERS:
+        raise ConfigError(f"printer.paper must be one of {', '.join(PAPERS)}")
     if type(result["feed_lines"]) is not int or not 0 <= result["feed_lines"] <= 10:
         raise ConfigError("printer.feed_lines must be between 0 and 10")
     if (

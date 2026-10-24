@@ -151,8 +151,42 @@ class RestartTests(unittest.TestCase):
         entry = saved["modules"]["daily"]
         self.assertEqual(entry["last_run_ts"], self.wall[0])
         self.assertEqual(entry["run_count"], 1)
-        self.assertIn("hello", "\n".join(entry["output"]["lines"]))
+        receipt = entry["output"]["receipt"]
+        self.assertEqual(receipt["title"], "Daily")
+        self.assertEqual(
+            receipt["blocks"],
+            [{"kind": "block", "title": "DAILY", "lines": ["hello"], "meta": {}}],
+        )
         self.assertEqual(list(self.data.glob("*.tmp")), [])
+
+    def write_output(self, output):
+        entry = {"last_run_ts": self.wall[0], "run_count": 1, "output": output}
+        (self.data / "state.json").write_text(
+            json.dumps({"version": 1, "modules": {"daily": entry}})
+        )
+
+    def test_saved_receipt_is_rerendered(self):
+        first = self.start()
+        first.run_module("daily")
+        png = first.output_png("daily")
+        second = self.restart(advance_wall=60)
+        self.assertEqual(second.output_png("daily"), png)
+        second.config.update_printer({"paper": "58mm"})
+        self.assertNotEqual(second.output_png("daily"), png)
+
+    def test_text_lines_from_older_versions_load(self):
+        self.write_output({"lines": ["DAILY", "-----", "hello"], "generated_at": "x"})
+        service = self.start()
+        self.assertEqual(service.output_text("daily"), "DAILY\n-----\nhello\n\n")
+        self.assertTrue(service.output_png("daily").startswith(b"\x89PNG"))
+
+    def test_invalid_saved_receipt_is_ignored(self):
+        bad = {"title": "t", "stamp": "", "blocks": [{"kind": "hologram"}]}
+        self.write_output({"receipt": bad, "generated_at": "x"})
+        with self.assertLogs("gpta.runner", "WARNING"):
+            service = self.start()
+        self.assertIsNone(service.outputs.get("daily"))
+        self.assertEqual(self.runtime(service).run_count, 1)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,8 @@ owns the printer, which serialises writes from the scheduler and HTTP threads.
 Callers wait for completion with a deadline, so a jammed printer degrades to a
 ``PrinterError`` instead of blocking the request or scheduler thread forever.
 
-With ``printer.cups_queue`` set, the ESC/POS bytes go to that queue through
+Receipts are printed as raster images (see :mod:`.escpos`). With
+``printer.cups_queue`` set, the ESC/POS bytes go to that queue through
 ``lp -o raw`` (CUPS's client tools, so no Python dependency). This is the way
 to print when CUPS owns the USB printer and there is no ``/dev/usb/lp*``.
 """
@@ -19,10 +20,11 @@ import stat
 import subprocess
 import threading
 import time
-from collections.abc import Sequence
 from typing import Any
 
-from ..renderer import to_escpos
+from PIL import Image
+
+from .escpos import to_escpos
 
 
 class PrinterError(Exception):
@@ -33,20 +35,20 @@ CUPS_COMMAND_TIMEOUT = 10
 CUPS_POLL_SECONDS = 0.5
 
 
-def _escpos_bytes(lines: Sequence[str], config: dict[str, Any]) -> bytes:
+def _escpos_bytes(image: Image.Image, config: dict[str, Any]) -> bytes:
     return to_escpos(
-        lines,
+        image,
         feed_lines=int(config.get("feed_lines", 0)),
         cut=bool(config.get("cut", True)),
     )
 
 
-def send_to_device(lines: Sequence[str], config: dict[str, Any]) -> None:
-    """Print ``lines`` on the configured printer (CUPS queue or device)."""
+def send_to_device(image: Image.Image, config: dict[str, Any]) -> None:
+    """Print ``image`` on the configured printer (CUPS queue or device)."""
     if config.get("cups_queue"):
-        _send_to_cups(lines, config)
+        _send_to_cups(image, config)
     else:
-        _send_to_device_node(lines, config)
+        _send_to_device_node(image, config)
 
 
 def _run(args: list[str], data: bytes | None = None) -> str:
@@ -81,7 +83,7 @@ def _queue_stopped(queue_name: str) -> str | None:
     return None
 
 
-def _send_to_cups(lines: Sequence[str], config: dict[str, Any]) -> None:
+def _send_to_cups(image: Image.Image, config: dict[str, Any]) -> None:
     queue_name = str(config["cups_queue"])
     # Finish (or cancel) before the writer's deadline so the caller gets
     # this function's error message rather than a generic timeout.
@@ -93,7 +95,7 @@ def _send_to_cups(lines: Sequence[str], config: dict[str, Any]) -> None:
         raise PrinterError(f"CUPS queue {queue_name} is stopped: {stopped}")
     output = _run(
         ["lp", "-d", queue_name, "-o", "raw", "-t", "gpta", "-"],
-        _escpos_bytes(lines, config),
+        _escpos_bytes(image, config),
     )
     match = re.search(r"request id is (\S+)", output)
     if not match:
@@ -116,7 +118,7 @@ def _send_to_cups(lines: Sequence[str], config: dict[str, Any]) -> None:
         raise PrinterError(f"CUPS job {job_id} failed; queue stopped: {stopped}")
 
 
-def _send_to_device_node(lines: Sequence[str], config: dict[str, Any]) -> None:
+def _send_to_device_node(image: Image.Image, config: dict[str, Any]) -> None:
     device = config.get("device", "")
     if not device:
         raise PrinterError("no printer device configured")
@@ -125,7 +127,7 @@ def _send_to_device_node(lines: Sequence[str], config: dict[str, Any]) -> None:
     resolved = os.path.realpath(device)
     if not resolved.startswith("/dev/"):
         raise PrinterError(f"refusing to follow {device} outside /dev")
-    data = _escpos_bytes(lines, config)
+    data = _escpos_bytes(image, config)
     try:
         fd = os.open(resolved, os.O_WRONLY | getattr(os, "O_NOCTTY", 0))
     except OSError as exc:
@@ -154,10 +156,10 @@ def _send_to_device_node(lines: Sequence[str], config: dict[str, Any]) -> None:
 
 
 class _PrintJob:
-    __slots__ = ("lines", "config", "done", "error", "state", "lock")
+    __slots__ = ("image", "config", "done", "error", "state", "lock")
 
-    def __init__(self, lines: Sequence[str], config: dict[str, Any]):
-        self.lines = tuple(lines)
+    def __init__(self, image: Image.Image, config: dict[str, Any]):
+        self.image = image
         self.config = dict(config)
         self.done = threading.Event()
         self.error: PrinterError | None = None
@@ -184,12 +186,12 @@ class PrinterWriter:
 
     def print(
         self,
-        lines: Sequence[str],
+        image: Image.Image,
         config: dict[str, Any],
         *,
         timeout: float,
     ) -> None:
-        job = _PrintJob(lines, config)
+        job = _PrintJob(image, config)
         self._ensure_thread()
         self._queue.put(job)
         if not job.done.wait(timeout):
@@ -216,7 +218,7 @@ class PrinterWriter:
                     continue
                 job.state = "writing"
             try:
-                send_to_device(job.lines, job.config)
+                send_to_device(job.image, job.config)
             except PrinterError as exc:
                 job.error = exc
             except Exception as exc:  # pragma: no cover - defensive

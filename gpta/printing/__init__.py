@@ -1,6 +1,7 @@
 """Thermal printer support.
 
-:mod:`.printer` holds the print policy; :mod:`.transport` does device I/O.
+:mod:`.printer` holds the print policy, :mod:`.transport` does device I/O,
+and :mod:`.escpos` encodes receipt images as ESC/POS raster data.
 """
 
 from .printer import (
@@ -8,7 +9,6 @@ from .printer import (
     Printer,
     PrinterDisabled,
     PrinterRateLimited,
-    test_receipt,
 )
 from .transport import PrinterError, PrinterWriter, send_to_device
 
@@ -20,5 +20,4 @@ __all__ = [
     "PrinterRateLimited",
     "PrinterWriter",
     "send_to_device",
-    "test_receipt",
 ]

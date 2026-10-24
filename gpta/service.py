@@ -15,14 +15,15 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .config import ConfigStore
+from .config import PAPERS, ConfigStore
 from .errors import NotFound
 from .http import HttpClient
 from .logbus import LogBus
 from .module_api import Module
 from .outputs import OutputStore
-from .printing import Printer, PrinterWriter, test_receipt
+from .printing import Printer, PrinterWriter
 from .registry import describe
+from .renderer import render_image, render_text, test_receipt, to_png
 from .runner import ModuleRunner, module_log
 from .scheduler import Scheduler
 from .state import StateStore
@@ -113,10 +114,12 @@ class Service:
         return self._printer_snapshot()
 
     def test_printer(self) -> dict[str, Any]:
-        width = self.config.snapshot()["printer"]["width"]
-        lines = test_receipt(width, datetime.fromtimestamp(self.clock(), UTC))
-        self.printer.submit(lines, "test", manual=True)
-        return {"ok": True, "lines": lines}
+        paper = PAPERS[self.config.snapshot()["printer"]["paper"]]
+        receipt = test_receipt(datetime.fromtimestamp(self.clock(), UTC))
+        self.printer.submit(
+            render_image(receipt, paper["width_px"]), "test", manual=True
+        )
+        return {"ok": True, "lines": render_text(receipt, paper["columns"])}
 
     # -- snapshots -----------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
@@ -144,20 +147,37 @@ class Service:
         }
 
     def output_text(self, key: str) -> str:
+        config = self.config.snapshot()
         if key == "total":
-            return self._total(self.config.snapshot())["text"]
+            return self._total(config)["text"]
         if key not in self.registry:
             raise NotFound(f"unknown output: {key}")
         output = self.outputs.get(key)
-        return output.text if output else ""
+        return output.text(_paper(config)["columns"]) if output else ""
 
-    def _total(self, config: dict[str, Any]) -> dict[str, Any]:
-        enabled = [
+    def output_png(self, key: str) -> bytes:
+        """The image that would be printed for ``key``, as PNG."""
+        config = self.config.snapshot()
+        width_px = _paper(config)["width_px"]
+        if key == "total":
+            image = self.outputs.total_image(self._enabled(config), width_px)
+        elif key in self.registry:
+            image = self.outputs.image(key, width_px)
+        else:
+            raise NotFound(f"unknown output: {key}")
+        if image is None:
+            raise NotFound(f"no output yet: {key}")
+        return to_png(image)
+
+    def _enabled(self, config: dict[str, Any]) -> list[str]:
+        return [
             module_id
             for module_id in sorted(self.registry)
             if config["modules"][module_id]["enabled"]
         ]
-        return self.outputs.total(enabled, int(config["printer"]["width"]))
+
+    def _total(self, config: dict[str, Any]) -> dict[str, Any]:
+        return self.outputs.total(self._enabled(config), _paper(config)["columns"])
 
     def _module_snapshot(
         self,
@@ -171,6 +191,7 @@ class Service:
         if runtime is None:
             runtime = self.runner.runtime_snapshot(module_id, cfg)
         output = self.outputs.get(module_id)
+        lines = output.lines(_paper(config)["columns"]) if output else []
         return {
             **self._descriptions[module_id],
             "enabled": cfg["enabled"],
@@ -179,8 +200,8 @@ class Service:
             "options": dict(cfg["options"]),
             "runtime": runtime,
             "output": {
-                "lines": list(output.lines) if output else [],
-                "text": output.text if output else "",
+                "lines": lines,
+                "text": "\n".join(lines) + "\n" if lines else "",
                 "generated_at": output.generated_at if output else None,
             },
         }
@@ -188,4 +209,12 @@ class Service:
     def _printer_snapshot(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
         if config is None:
             config = self.config.snapshot()["printer"]
-        return {**config, **self.printer.status()}
+        return {
+            **config,
+            "width_px": PAPERS[config["paper"]]["width_px"],
+            **self.printer.status(),
+        }
+
+
+def _paper(config: dict[str, Any]) -> dict[str, int]:
+    return PAPERS[config["printer"]["paper"]]

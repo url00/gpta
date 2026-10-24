@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .config import ConfigStore
+from PIL import Image
+
+from .config import PAPERS, ConfigStore
 from .errors import AlreadyRunning, ModuleStuck, ModuleTimeout, NotFound
 from .module_api import Block, Cache, Module, ModuleContext
 from .outputs import OutputStore
@@ -20,7 +22,7 @@ from .printing import (
     PrinterError,
     PrinterRateLimited,
 )
-from .renderer import render_receipt
+from .renderer import Receipt, build_receipt, render_image
 from .state import StateStore
 
 log = logging.getLogger("gpta.runner")
@@ -71,7 +73,7 @@ class RunTicket:
 
     module: Module
     cfg: dict[str, Any]
-    width: int
+    width_px: int
 
 
 def effective_interval(cfg: dict[str, Any], runtime: ModuleRuntime) -> int:
@@ -158,7 +160,7 @@ class ModuleRunner:
         return RunTicket(
             self.registry[module_id],
             settings["modules"][module_id],
-            int(settings["printer"]["width"]),
+            PAPERS[settings["printer"]["paper"]]["width_px"],
         )
 
     def execute(self, ticket: RunTicket, trigger: str) -> dict[str, Any]:
@@ -185,14 +187,16 @@ class ModuleRunner:
             blocks = self._fetch_with_timeout(module, ctx)
             if not blocks:
                 blocks = [Block("No content", ("No items available.",))]
-            lines = render_receipt(
+            receipt = build_receipt(
                 module.name,
                 blocks,
-                ticket.width,
                 max_chars=int(cfg["limits"]["max_chars"]),
                 now=now,
             )
-            self.outputs.set(module_id, lines, self._iso_now())
+            # Render now, so a layout error fails the run and the preview and
+            # the print share one image.
+            image = render_image(receipt, ticket.width_px)
+            self.outputs.set(module_id, receipt, self._iso_now(), image=image)
             with self._lock:
                 runtime = self._runtime[module_id]
                 runtime.last_ok = True
@@ -201,7 +205,7 @@ class ModuleRunner:
                 runtime.print_skipped = None
                 runtime.consecutive_failures = 0
             module_log(f"fetched {len(blocks)} block(s)", "info", module_id)
-            printed = self._auto_print(module_id, lines, manual=trigger == "manual")
+            printed = self._auto_print(module_id, image, manual=trigger == "manual")
         except Exception as exc:
             error = str(exc)
             module_log(f"run failed: {error}", "error", module_id)
@@ -233,10 +237,10 @@ class ModuleRunner:
         result["runtime"] = self.runtime_snapshot(module_id)
         return result
 
-    def _auto_print(self, module_id: str, lines: list[str], *, manual: bool) -> bool:
+    def _auto_print(self, module_id: str, image: Image.Image, *, manual: bool) -> bool:
         """Print a run's receipt if printing is on; record why not otherwise."""
         try:
-            self.printer.submit(lines, module_id, auto=True, manual=manual)
+            self.printer.submit(image, module_id, auto=True, manual=manual)
         except AutoPrintOff as exc:
             self._set_print_state(module_id, skipped=str(exc))
             return False
@@ -377,16 +381,27 @@ class ModuleRunner:
                 value = entry.get(name)
                 if type(value) is int and value >= 0:
                     setattr(runtime, name, value)
-            output = entry.get("output")
-            if isinstance(output, dict):
-                lines = output.get("lines")
-                generated_at = output.get("generated_at")
-                if (
-                    isinstance(lines, list)
-                    and all(isinstance(line, str) for line in lines)
-                    and isinstance(generated_at, str)
-                ):
-                    self.outputs.set(module_id, lines, generated_at)
+            self._restore_output(module_id, entry.get("output"))
+
+    def _restore_output(self, module_id: str, output: Any) -> None:
+        """Restore a saved receipt. Text lines from older versions still load."""
+        if not isinstance(output, dict):
+            return
+        generated_at = output.get("generated_at")
+        if not isinstance(generated_at, str):
+            return
+        lines = output.get("lines")
+        try:
+            if "receipt" in output:
+                receipt = Receipt.from_dict(output["receipt"])
+            elif isinstance(lines, list) and all(isinstance(x, str) for x in lines):
+                receipt = Receipt.from_lines(lines)
+            else:
+                return
+        except (TypeError, ValueError) as exc:
+            log.warning("ignoring saved output of %s: %s", module_id, exc)
+            return
+        self.outputs.set(module_id, receipt, generated_at)
 
     def _persist(self) -> None:
         if self.state is None:
@@ -410,7 +425,7 @@ class ModuleRunner:
                 output = self.outputs.get(module_id)
                 if output is not None:
                     entry["output"] = {
-                        "lines": list(output.lines),
+                        "receipt": output.receipt.to_dict(),
                         "generated_at": output.generated_at,
                     }
             self.state.save_modules(modules)
