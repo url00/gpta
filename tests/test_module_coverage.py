@@ -12,16 +12,12 @@ class ModuleCoverageTests(unittest.TestCase):
         modules = discover(DEFAULT_MODULES_DIR, errors=errors)
         self.assertEqual(errors, {}, "project modules must not be quarantined")
 
-        source = Path(__file__).with_name("test_modules.py").read_text(
-            encoding="utf-8"
-        )
+        source = Path(__file__).with_name("test_modules.py").read_text(encoding="utf-8")
         test_names = re.findall(r"def (test_[A-Za-z0-9_]+)\(", source)
         missing = [
             module_id
             for module_id in modules
-            if not any(
-                name.startswith(f"test_{module_id}") for name in test_names
-            )
+            if not any(name.startswith(f"test_{module_id}") for name in test_names)
         ]
         self.assertEqual(
             missing,

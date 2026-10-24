@@ -106,10 +106,7 @@ class Cache:
                     stat = path.stat()
                 except OSError:
                     continue
-                if (
-                    self.max_age_seconds
-                    and now - stat.st_mtime > self.max_age_seconds
-                ):
+                if self.max_age_seconds and now - stat.st_mtime > self.max_age_seconds:
                     try:
                         path.unlink()
                         continue

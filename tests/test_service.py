@@ -160,7 +160,8 @@ class ServiceTests(unittest.TestCase):
         send.assert_called_once()
         self.assertTrue(self.service.snapshot()["printer"]["last_job"])
         with patch(
-            "gpta.printing.transport.send_to_device", side_effect=PrinterError("no device")
+            "gpta.printing.transport.send_to_device",
+            side_effect=PrinterError("no device"),
         ):
             result = self.service.run_module("fake")
         self.assertTrue(result["ok"])
@@ -189,21 +190,15 @@ class ServiceTests(unittest.TestCase):
         first = self.service.run_module("flaky")
         self.assertFalse(first["ok"])
         self.assertEqual(first["module"]["runtime"]["consecutive_failures"], 1)
-        self.assertEqual(
-            first["module"]["runtime"]["effective_interval_seconds"], 10
-        )
+        self.assertEqual(first["module"]["runtime"]["effective_interval_seconds"], 10)
         second = self.service.run_module("flaky")
         self.assertEqual(second["module"]["runtime"]["consecutive_failures"], 2)
-        self.assertEqual(
-            second["module"]["runtime"]["effective_interval_seconds"], 20
-        )
+        self.assertEqual(second["module"]["runtime"]["effective_interval_seconds"], 20)
         self.registry["flaky"].fail = False
         third = self.service.run_module("flaky")
         self.assertTrue(third["ok"])
         self.assertEqual(third["module"]["runtime"]["consecutive_failures"], 0)
-        self.assertEqual(
-            third["module"]["runtime"]["effective_interval_seconds"], 5
-        )
+        self.assertEqual(third["module"]["runtime"]["effective_interval_seconds"], 5)
 
     def test_monotonic_scheduling_ignores_wall_clock_jump(self):
         wall = [1_000_000.0]
@@ -246,7 +241,9 @@ class ServiceTests(unittest.TestCase):
         )
         try:
             emitter = service.runner._make_emitter("fake")
-            with patch("gpta.runner.module_log", side_effect=lambda *a, **k: messages.append(a)):
+            with patch(
+                "gpta.runner.module_log", side_effect=lambda *a, **k: messages.append(a)
+            ):
                 for index in range(105):
                     emitter(f"line {index}")
             self.assertEqual(len(messages), 101)

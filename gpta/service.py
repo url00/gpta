@@ -67,7 +67,9 @@ class Service:
             clock=clock,
             monotonic=monotonic,
         )
-        self.scheduler = Scheduler(config, self.runner, clock=clock, monotonic=monotonic)
+        self.scheduler = Scheduler(
+            config, self.runner, clock=clock, monotonic=monotonic
+        )
         self._descriptions = {
             module_id: describe(module) for module_id, module in registry.items()
         }

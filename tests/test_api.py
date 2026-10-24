@@ -113,9 +113,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         status, _, _ = self.request("GET", "/api/output/nope")
         self.assertEqual(status, 404)
-        status, _, _ = self.request(
-            "PATCH", "/api/modules/affirmations", raw=b"{bad"
-        )
+        status, _, _ = self.request("PATCH", "/api/modules/affirmations", raw=b"{bad")
         self.assertEqual(status, 400)
 
     def test_wrong_method_returns_405_with_allow(self):

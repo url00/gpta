@@ -31,7 +31,9 @@ class FetchError(_ModuleFetchError):
     catch one exception type.
     """
 
-    def __init__(self, message: str, *, status: int | None = None, url: str | None = None):
+    def __init__(
+        self, message: str, *, status: int | None = None, url: str | None = None
+    ):
         super().__init__(message)
         self.status = status
         self.url = url
@@ -76,7 +78,9 @@ class HttpClient:
                 f"HTTP {exc.code} for {url}", status=exc.code, url=url
             ) from exc
         except urllib.error.URLError as exc:
-            raise FetchError(f"request failed for {url}: {exc.reason}", url=url) from exc
+            raise FetchError(
+                f"request failed for {url}: {exc.reason}", url=url
+            ) from exc
         except TimeoutError as exc:
             raise FetchError(f"request timed out for {url}", url=url) from exc
 

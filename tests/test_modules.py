@@ -75,15 +75,27 @@ class ModuleTests(unittest.TestCase):
             {
                 TOP_STORIES: [1, 2, 3],
                 HN_ITEM.format(1): {
-                    "id": 1, "type": "story", "title": "One", "score": 100,
-                    "time": recent, "descendants": 3, "url": "https://one.example",
+                    "id": 1,
+                    "type": "story",
+                    "title": "One",
+                    "score": 100,
+                    "time": recent,
+                    "descendants": 3,
+                    "url": "https://one.example",
                 },
                 HN_ITEM.format(2): {
-                    "id": 2, "type": "story", "title": "Two", "score": 200,
-                    "time": recent, "descendants": 4,
+                    "id": 2,
+                    "type": "story",
+                    "title": "Two",
+                    "score": 200,
+                    "time": recent,
+                    "descendants": 4,
                 },
                 HN_ITEM.format(3): {
-                    "id": 3, "type": "story", "title": "Old", "score": 300,
+                    "id": 3,
+                    "type": "story",
+                    "title": "Old",
+                    "score": 300,
                     "time": old,
                 },
             }

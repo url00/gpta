@@ -39,9 +39,7 @@ class PrinterSafetyTests(unittest.TestCase):
         self.registry = {"fake": FakeModule()}
         self.store = ConfigStore(Path(self.tmp.name) / "config.json", self.registry)
         self.store.load()
-        self.service = Service(
-            self.store, self.registry, LogBus(), fetch_timeout=1.0
-        )
+        self.service = Service(self.store, self.registry, LogBus(), fetch_timeout=1.0)
 
     def tearDown(self):
         self.service.stop()
@@ -114,7 +112,8 @@ class PrinterSafetyTests(unittest.TestCase):
     def test_consecutive_failures_trip_circuit_breaker(self):
         self.enable_printer(failure_threshold=2)
         with patch(
-            "gpta.printing.transport.send_to_device", side_effect=PrinterError("offline")
+            "gpta.printing.transport.send_to_device",
+            side_effect=PrinterError("offline"),
         ):
             self.service.run_module("fake")
             self.assertTrue(self.store.snapshot()["printer"]["enabled"])
@@ -144,7 +143,10 @@ class PrinterSafetyTests(unittest.TestCase):
     def test_writer_deadline(self):
         writer = PrinterWriter()
         try:
-            with patch("gpta.printing.transport.send_to_device", side_effect=lambda *a: time.sleep(0.5)):
+            with patch(
+                "gpta.printing.transport.send_to_device",
+                side_effect=lambda *a: time.sleep(0.5),
+            ):
                 started = time.monotonic()
                 with self.assertRaises(PrinterError):
                     writer.print(["hello"], {"device": "/dev/null"}, timeout=0.05)
@@ -163,7 +165,9 @@ class PrinterSafetyTests(unittest.TestCase):
                 release.wait(2)
 
         try:
-            with patch("gpta.printing.transport.send_to_device", side_effect=blocking_send):
+            with patch(
+                "gpta.printing.transport.send_to_device", side_effect=blocking_send
+            ):
                 first = threading.Thread(
                     target=lambda: writer.print(["first"], {}, timeout=2)
                 )

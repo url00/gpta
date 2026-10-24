@@ -28,7 +28,9 @@ SCOPE = "https://www.googleapis.com/auth/tasks"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client-id", default=os.environ.get("GOOGLE_CLIENT_ID"))
-    parser.add_argument("--client-secret", default=os.environ.get("GOOGLE_CLIENT_SECRET"))
+    parser.add_argument(
+        "--client-secret", default=os.environ.get("GOOGLE_CLIENT_SECRET")
+    )
     parser.add_argument("--data-dir", default=os.environ.get("GPTA_DATA_DIR"))
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--timeout", type=int, default=300)
@@ -45,9 +47,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    data_dir = Path(
-        args.data_dir or os.environ.get("GPTA_DATA_DIR") or (Path.cwd() / "data")
-    ).expanduser().resolve()
+    data_dir = (
+        Path(args.data_dir or os.environ.get("GPTA_DATA_DIR") or (Path.cwd() / "data"))
+        .expanduser()
+        .resolve()
+    )
     data_dir.mkdir(parents=True, exist_ok=True)
     creds_path = data_dir / "google_credentials.json"
 
@@ -102,7 +106,11 @@ def main(argv: list[str] | None = None) -> int:
             pass
 
     deadline = time.monotonic() + args.timeout
-    while time.monotonic() < deadline and "code" not in captured and "error" not in captured:
+    while (
+        time.monotonic() < deadline
+        and "code" not in captured
+        and "error" not in captured
+    ):
         httpd.handle_request()
     httpd.server_close()
 

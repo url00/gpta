@@ -142,7 +142,14 @@ class ConfigTests(unittest.TestCase):
         printer = store.snapshot()["printer"]
         self.assertEqual(printer["width"], 32)
         self.assertEqual(printer["feed_lines"], 5)
-        for fragment in ("gone", "longer than", "interval_seconds", "width", "bogus", "extra"):
+        for fragment in (
+            "gone",
+            "longer than",
+            "interval_seconds",
+            "width",
+            "bogus",
+            "extra",
+        ):
             self.assertIn(fragment, logs)
 
     def test_unreadable_file_is_fatal(self):

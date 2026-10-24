@@ -25,7 +25,9 @@ def ascii_safe(text: object) -> str:
         .replace("…", "...")
     )
     value = "".join(
-        ch for ch in unicodedata.normalize("NFKD", value) if not unicodedata.combining(ch)
+        ch
+        for ch in unicodedata.normalize("NFKD", value)
+        if not unicodedata.combining(ch)
     )
     value = value.encode("ascii", "replace").decode("ascii")
     out = []

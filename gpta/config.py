@@ -68,7 +68,9 @@ def _validate_value(key: str, value: Any, schema: dict[str, Any], where: str) ->
                 f"{where}.{key} is longer than {schema['max_length']} characters"
             )
     elif kind == "select":
-        choices = [c["value"] if isinstance(c, dict) else c for c in schema.get("choices", [])]
+        choices = [
+            c["value"] if isinstance(c, dict) else c for c in schema.get("choices", [])
+        ]
         if value not in choices:
             raise ConfigError(f"{where}.{key} must be one of {choices!r}")
     else:  # pragma: no cover - schema is developer supplied
@@ -286,9 +288,10 @@ def _normalise_printer(raw: Any) -> dict[str, Any]:
         raise ConfigError("printer.width must be 32 or 48")
     if type(result["feed_lines"]) is not int or not 0 <= result["feed_lines"] <= 10:
         raise ConfigError("printer.feed_lines must be between 0 and 10")
-    if type(result["write_timeout_seconds"]) is not int or not 1 <= result[
-        "write_timeout_seconds"
-    ] <= 120:
+    if (
+        type(result["write_timeout_seconds"]) is not int
+        or not 1 <= result["write_timeout_seconds"] <= 120
+    ):
         raise ConfigError("printer.write_timeout_seconds must be between 1 and 120")
     if (
         type(result["min_print_spacing_seconds"]) is not int

@@ -69,9 +69,7 @@ class Printer:
         if reason is not None:
             raise PrinterRateLimited(f"print rate limited: {reason}")
         try:
-            self._writer.print(
-                lines, cfg, timeout=float(cfg["write_timeout_seconds"])
-            )
+            self._writer.print(lines, cfg, timeout=float(cfg["write_timeout_seconds"]))
         except PrinterError as exc:
             self._record_failure(cfg, str(exc), source if auto else None)
             raise

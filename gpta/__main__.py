@@ -128,9 +128,11 @@ def _print_url(data_dir: Path, args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    data_dir = Path(
-        args.data_dir or os.environ.get("GPTA_DATA_DIR") or (Path.cwd() / "data")
-    ).expanduser().resolve()
+    data_dir = (
+        Path(args.data_dir or os.environ.get("GPTA_DATA_DIR") or (Path.cwd() / "data"))
+        .expanduser()
+        .resolve()
+    )
     if args.print_url:
         return _print_url(data_dir, args)
     modules_dir = (

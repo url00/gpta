@@ -237,7 +237,9 @@ class Handler(BaseHTTPRequestHandler):
         self, status: int, payload: Any, headers: dict[str, str] | None = None
     ) -> None:
         data = json.dumps(payload).encode("utf-8")
-        self._send_headers(status, "application/json; charset=utf-8", len(data), headers)
+        self._send_headers(
+            status, "application/json; charset=utf-8", len(data), headers
+        )
         if self.command != "HEAD":
             self.wfile.write(data)
 

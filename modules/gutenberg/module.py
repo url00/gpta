@@ -120,7 +120,12 @@ def _strip_boilerplate(text: str) -> str:
         if len(paragraph) < 100 and (
             paragraph.isupper()
             or lowered.startswith(
-                ("produced by", "transcriber", "updated editions", "character set encoding")
+                (
+                    "produced by",
+                    "transcriber",
+                    "updated editions",
+                    "character set encoding",
+                )
             )
         ):
             continue
