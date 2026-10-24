@@ -8,7 +8,7 @@ import mimetypes
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .config import ConfigError
 from .printer import PrinterError, PrinterRateLimited
@@ -23,6 +23,25 @@ from .service import (
 log = logging.getLogger("gpta.httpserver")
 
 MAX_BODY = 64 * 1024
+STATE_CHANGING = {"POST", "PATCH"}
+
+
+WILDCARD_HOSTS = {"", "0.0.0.0", "::"}
+
+
+class Forbidden(Exception):
+    pass
+
+
+def _hostname(value: str) -> str:
+    """Return the lowercase hostname from a Host header or URL authority."""
+    value = value.strip().lower()
+    if value.startswith("["):  # [::1]:8787
+        end = value.find("]")
+        return value[1:end] if end != -1 else value
+    if value.count(":") == 1:  # host:port (a bare IPv6 address has several)
+        return value.split(":", 1)[0]
+    return value
 
 
 class GptaHTTPServer(ThreadingHTTPServer):
@@ -34,9 +53,14 @@ class GptaHTTPServer(ThreadingHTTPServer):
         address,
         service: Service,
         web_root: Path,
+        allowed_hosts: Iterable[str],
     ):
         self.service = service
         self.web_root = Path(web_root).resolve()
+        self.allowed_hosts = {_hostname(h) for h in allowed_hosts}
+        bind_host = _hostname(str(address[0]))
+        if bind_host not in WILDCARD_HOSTS:
+            self.allowed_hosts.add(bind_host)
         super().__init__(address, Handler)
 
 
@@ -98,6 +122,9 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
         path = urllib.parse.unquote(parsed.path)
+        # No POST endpoint takes a body today, but requiring JSON keeps
+        # cross-site form posts out (they cannot send application/json).
+        self._read_json()
         if path.startswith("/api/modules/"):
             parts = [p for p in path[len("/api/modules/") :].split("/") if p]
             if len(parts) == 2 and parts[1] == "run":
@@ -128,8 +155,23 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- dispatch ------------------------------------------------------
     def _dispatch(self, fn: Callable[[], None]) -> None:
+        self._body: bytes | None = None
         try:
+            self._receive_body()
+            self._check_host()
+            if self.command in STATE_CHANGING:
+                self._check_origin()
             fn()
+        except Forbidden as exc:
+            log.warning(
+                "403 %s %s (Host=%r Origin=%r): %s",
+                self.command,
+                self.path,
+                self.headers.get("Host"),
+                self.headers.get("Origin"),
+                exc,
+            )
+            self._json(403, {"error": str(exc)})
         except NotFound as exc:
             self._json(404, {"error": str(exc)})
         except (ValidationError, ConfigError) as exc:
@@ -200,18 +242,53 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    # -- request guards ------------------------------------------------
+    def _check_host(self) -> None:
+        # Rejecting unknown Host headers blocks DNS rebinding: a hostile page
+        # that rebinds its own name to 127.0.0.1 still sends its own name.
+        host = self.headers.get("Host")
+        if not host or _hostname(host) not in self.server.allowed_hosts:
+            raise Forbidden("host not allowed; add it to server.allowed_hosts")
+
+    def _check_origin(self) -> None:
+        # Browsers send Origin on cross-origin and POST/PATCH requests.
+        # Non-browser clients (curl, scripts) usually omit it.
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return
+        netloc = urllib.parse.urlsplit(origin).netloc
+        if not netloc or _hostname(netloc) not in self.server.allowed_hosts:
+            raise Forbidden("cross-origin request rejected")
+
     # -- request body --------------------------------------------------
+    def _receive_body(self) -> None:
+        """Read the whole request body before routing.
+
+        The connection is kept alive (HTTP/1.1), so any unread body bytes
+        would be parsed as the start of the next request. A body that cannot
+        be read safely closes the connection instead.
+        """
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            raise ValidationError("chunked request bodies are not supported")
+        raw_length = self.headers.get("Content-Length")
+        try:
+            length = int(raw_length) if raw_length else 0
+        except ValueError as exc:
+            self.close_connection = True
+            raise ValidationError("invalid Content-Length") from exc
+        if length < 0 or length > MAX_BODY:
+            self.close_connection = True
+            raise ValidationError("request body too large")
+        self._body = self.rfile.read(length) if length else b""
+
     def _read_json(self) -> dict[str, Any]:
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if ctype != "application/json":
             raise ValidationError("Content-Type must be application/json")
-        try:
-            length = int(self.headers.get("Content-Length") or "0")
-        except ValueError as exc:
-            raise ValidationError("invalid Content-Length") from exc
-        if length < 0 or length > MAX_BODY:
-            raise ValidationError("request body too large")
-        raw = self.rfile.read(length)
+        raw = self._body or b""
+        if not raw.strip():
+            return {}
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -229,5 +306,8 @@ def create_server(
     port: int,
     service: Service,
     web_root: Path,
+    allowed_hosts: Iterable[str] | None = None,
 ) -> GptaHTTPServer:
-    return GptaHTTPServer((host, port), service, web_root)
+    if allowed_hosts is None:
+        allowed_hosts = service.config.snapshot()["server"]["allowed_hosts"]
+    return GptaHTTPServer((host, port), service, web_root, allowed_hosts)

@@ -47,6 +47,9 @@ interleave with the rotating handler.
 authenticating layer (Cloudflare Tunnel with Access/OAuth, an authenticating
 reverse proxy, or a private network) do not need a second credential, and an
 in-process token check cannot protect a directly exposed port on its own.
-Binding beyond loopback logs a warning but still starts. The JSON content-type
-CSRF rule remains as a browser-side defense, not user authentication; `Host`
-is not restricted so tunneled public hostnames work.
+Binding beyond loopback logs a warning but still starts.
+
+Browser-side defenses are kept because the console may run on a machine that
+is also used for everyday browsing: a `Host` allowlist (`server.allowed_hosts`)
+blocks DNS rebinding, and JSON-only writes plus an `Origin` check block CSRF.
+A tunneled public hostname is added to the allowlist rather than disabling it.

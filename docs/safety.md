@@ -46,12 +46,13 @@ records what happens when things go wrong.
   be hosted behind another authentication layer (for example a Cloudflare
   Tunnel with Access/OAuth, an authenticating reverse proxy, or a VPN) whenever
   it is reachable beyond loopback.
-- **CSRF:** state-changing API requests require `Content-Type:
-  application/json`, which blocks cross-origin "simple" form posts. Keep this
-  invariant when adding endpoints.
-- **No `Host` allowlist:** any `Host` header is accepted so tunnels and reverse
-  proxies can forward public hostnames. Access control therefore depends on
-  the external authentication layer; there is no DNS-rebinding guard.
+- **CSRF:** every `POST`/`PATCH` requires `Content-Type: application/json`
+  (cross-site form posts cannot send it), and a browser `Origin` header must
+  name an allowed host. Both checks run centrally in the request dispatcher,
+  so new endpoints inherit them.
+- **`Host` allowlist:** requests are answered only when the `Host` header is
+  in `server.allowed_hosts` (plus the bind address). This is the DNS-rebinding
+  guard. Tunneled public hostnames must be listed explicitly.
 - **Printer device:** configuration is restricted to normalised paths under
   `/dev/`; the transport resolves symlinks, requires the target to stay under
   `/dev/`, and refuses non-character devices.

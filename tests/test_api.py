@@ -30,7 +30,13 @@ class ApiTests(unittest.TestCase):
         self.service = Service(
             self.store, self.registry, self.bus, modules_dir=DEFAULT_MODULES_DIR
         )
-        self.server = create_server("127.0.0.1", 0, self.service, DEFAULT_WEB_ROOT)
+        self.server = create_server(
+            "127.0.0.1",
+            0,
+            self.service,
+            DEFAULT_WEB_ROOT,
+            allowed_hosts=["localhost", "127.0.0.1", "gpta.example.test"],
+        )
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -130,16 +136,100 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["entries"], [])
 
-    def test_external_host_header_accepted(self):
-        # The server sits behind a tunnel that forwards the public hostname.
-        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
-        conn.putrequest("GET", "/api/state", skip_host=True)
-        conn.putheader("Host", "gpta.theplacewiththestuff.online")
-        conn.endheaders()
+    def raw_request(self, conn, method, path, body=b"", headers=None, host=None):
+        conn.putrequest(method, path, skip_host=host is not None)
+        if host is not None:
+            conn.putheader("Host", host)
+        for name, value in (headers or {}).items():
+            conn.putheader(name, value)
+        if body or method in ("POST", "PATCH"):
+            conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body or None)
         response = conn.getresponse()
-        body = response.read()
-        conn.close()
-        self.assertEqual(response.status, 200, body)
+        return response.status, response.read()
+
+    def test_allowed_host_header_accepted(self):
+        # A tunnel forwards the public hostname listed in allowed_hosts.
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            status, body = self.raw_request(
+                conn, "GET", "/api/state", host="gpta.example.test:443"
+            )
+        finally:
+            conn.close()
+        self.assertEqual(status, 200, body)
+
+    def test_unknown_host_rejected(self):
+        # DNS rebinding: the attacker's page still sends its own hostname.
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            status, _ = self.raw_request(
+                conn, "GET", "/api/state", host="evil.example:8787"
+            )
+        finally:
+            conn.close()
+        self.assertEqual(status, 403)
+
+    def test_cross_origin_write_rejected(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            status, _ = self.raw_request(
+                conn,
+                "PATCH",
+                "/api/printer",
+                b'{"width": 48}',
+                {"Content-Type": "application/json", "Origin": "https://evil.example"},
+            )
+            self.assertEqual(status, 403)
+            status, body = self.raw_request(
+                conn,
+                "PATCH",
+                "/api/printer",
+                b'{"width": 48}',
+                {
+                    "Content-Type": "application/json",
+                    "Origin": "https://gpta.example.test",
+                },
+            )
+            self.assertEqual(status, 200, body)
+        finally:
+            conn.close()
+
+    def test_post_requires_json(self):
+        # A cross-site HTML form can only send "simple" content types.
+        status, _, _ = self.request(
+            "POST",
+            "/api/modules/affirmations/run",
+            raw=b"a=b",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        self.assertEqual(status, 400)
+        status, _, _ = self.request("POST", "/api/printer/test", raw=b"")
+        self.assertEqual(status, 400)
+
+    def test_keep_alive_survives_bodies(self):
+        # Unread body bytes used to corrupt the next request on the connection.
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        json_headers = {"Content-Type": "application/json"}
+        try:
+            status, _ = self.raw_request(
+                conn, "POST", "/api/modules/affirmations/run", b"{}", json_headers
+            )
+            self.assertEqual(status, 200)
+            status, _ = self.raw_request(conn, "GET", "/api/logs?since=0")
+            self.assertEqual(status, 200)
+            status, _ = self.raw_request(
+                conn,
+                "PATCH",
+                "/api/printer",
+                b'{"width": 48}',
+                {"Content-Type": "text/plain"},
+            )
+            self.assertEqual(status, 400)
+            status, _ = self.raw_request(conn, "GET", "/api/logs?since=0")
+            self.assertEqual(status, 200)
+        finally:
+            conn.close()
 
     def test_printer_config_roundtrip(self):
         status, body, _ = self.request(

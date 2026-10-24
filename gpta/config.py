@@ -16,6 +16,9 @@ DEFAULT_SERVER = {
     "host": "127.0.0.1",
     "port": 8787,
     "run_timeout_seconds": 120,
+    # Hostnames accepted in the Host header (port ignored). Add any public
+    # hostname a tunnel or reverse proxy forwards, e.g. "gpta.example.com".
+    "allowed_hosts": ["localhost", "127.0.0.1", "::1"],
 }
 DEFAULT_PRINTER = {
     "enabled": False,
@@ -160,7 +163,7 @@ def _normalise_server(raw: Any) -> dict[str, Any]:
     unknown = set(raw) - SERVER_KEYS
     if unknown:
         raise ConfigError(f"server has unknown keys: {', '.join(sorted(unknown))}")
-    result = dict(DEFAULT_SERVER)
+    result = copy.deepcopy(DEFAULT_SERVER)
     result.update(raw)
     if not isinstance(result["host"], str) or not result["host"].strip():
         raise ConfigError("server.host must be a non-empty string")
@@ -171,6 +174,14 @@ def _normalise_server(raw: Any) -> dict[str, Any]:
         or not 5 <= result["run_timeout_seconds"] <= 3600
     ):
         raise ConfigError("server.run_timeout_seconds must be between 5 and 3600")
+    hosts = result["allowed_hosts"]
+    if (
+        not isinstance(hosts, list)
+        or not hosts
+        or not all(isinstance(h, str) and h.strip() for h in hosts)
+    ):
+        raise ConfigError("server.allowed_hosts must be a non-empty list of hostnames")
+    result["allowed_hosts"] = [h.strip().lower() for h in hosts]
     return result
 
 

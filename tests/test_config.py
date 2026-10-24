@@ -70,6 +70,17 @@ class ConfigTests(unittest.TestCase):
                     self.store.update_printer({"device": device})
         self.store.update_printer({"device": "/dev/null"})
 
+    def test_allowed_hosts_normalised(self):
+        data = json.loads(self.path.read_text())
+        data["server"]["allowed_hosts"] = ["localhost", " GPTA.Example.Test "]
+        self.path.write_text(json.dumps(data))
+        store = ConfigStore(self.path, {"echo": EchoModule()})
+        store.load()
+        self.assertEqual(
+            store.snapshot()["server"]["allowed_hosts"],
+            ["localhost", "gpta.example.test"],
+        )
+
     def test_print_guard_config_is_validated(self):
         with self.assertRaises(ConfigError):
             self.store.update_printer({"min_print_spacing_seconds": -1})

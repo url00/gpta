@@ -133,10 +133,19 @@ active run per module, truncated receipts and HTTP bodies, bounded cache/logs,
 failure backoff, and printer serialization. See
 [docs/safety.md](docs/safety.md) for the full failure matrix and known limits.
 
-The console rejects state-changing requests without
-`Content-Type: application/json` (CSRF protection) and accepts any `Host`
-header, so a reverse proxy or tunnel can forward the public hostname. It binds
-to `127.0.0.1` by default.
+The console binds to `127.0.0.1` by default and only answers requests whose
+`Host` header is in `server.allowed_hosts` (default `localhost`, `127.0.0.1`,
+`::1`; the bind address is added automatically). This blocks DNS rebinding. When
+a tunnel or reverse proxy forwards a public hostname, add it to
+`data/config.json` and restart:
+
+```json
+"server": {"allowed_hosts": ["localhost", "127.0.0.1", "::1", "gpta.example.com"]}
+```
+
+Every `POST`/`PATCH` must send `Content-Type: application/json`, and a browser
+`Origin` header must name an allowed host. Both block cross-site requests.
+Rejected requests return `403` and are logged with the offending `Host`.
 
 **GPTA has no authentication of its own.** When it is reachable beyond
 loopback, it MUST be hosted behind another authentication layer, such as a
@@ -156,7 +165,8 @@ networks.
 | PATCH | `/api/printer` | Printer config |
 | POST | `/api/printer/test` | Test page |
 
-JSON request bodies require `Content-Type: application/json`. Unknown modules
+`POST` and `PATCH` require `Content-Type: application/json` (an empty body is
+treated as `{}`). A disallowed `Host` or `Origin` returns 403. Unknown modules
 and outputs return 404, invalid configuration returns 400, a concurrent
 manual run returns 409, and a rate-limited test print returns 429.
 `/api/state` no longer embeds logs; fetch them
