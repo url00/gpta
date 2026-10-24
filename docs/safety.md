@@ -13,7 +13,7 @@ records what happens when things go wrong.
 | Module import/validation fails | Registry validation, including defaults checked against the module's own schema | Module quarantined, error exposed in `/api/state.registry_errors`, other modules start | Fix the folder and restart |
 | Printer offline | Open/write error, or write deadline | Run still succeeds; `print_error` recorded; consecutive failures counted | Fix device; failures reset on success |
 | Printer busy | Single writer thread | Writes are serialized, never interleaved | Automatic |
-| Printer jammed | `write_timeout_seconds` deadline | Caller gets `PrinterError`; device thread may remain blocked | Restart if the kernel never returns |
+| Printer jammed | `write_timeout_seconds` deadline | Caller gets `PrinterError`; device thread may remain blocked; jobs that time out while still queued are cancelled and never print | Restart if the kernel never returns |
 | Print loop / runaway | Min spacing + hourly cap | Extra prints are skipped (auto) or rejected `429` (manual test) | Adjust `printer.*` config |
 | Repeated print failures | `failure_threshold` consecutive failures | Printer auto-disabled, error logged, `disabled_reason` exposed | Re-enable in the UI/API |
 | Repeated module failures | Non-zero `consecutive_failures` | Effective interval doubles, capped at 7 days | One success resets it |

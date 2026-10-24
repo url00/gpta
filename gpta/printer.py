@@ -73,13 +73,15 @@ def send_to_device(lines: Sequence[str], config: dict[str, Any]) -> None:
 
 
 class _PrintJob:
-    __slots__ = ("lines", "config", "done", "error")
+    __slots__ = ("lines", "config", "done", "error", "state", "lock")
 
     def __init__(self, lines: Sequence[str], config: dict[str, Any]):
         self.lines = tuple(lines)
         self.config = dict(config)
         self.done = threading.Event()
         self.error: PrinterError | None = None
+        self.state = "queued"  # queued -> writing -> done, or queued -> cancelled
+        self.lock = threading.Lock()
 
 
 class PrinterWriter:
@@ -110,7 +112,16 @@ class PrinterWriter:
         self._ensure_thread()
         self._queue.put(job)
         if not job.done.wait(timeout):
-            raise PrinterError(f"printer did not respond within {timeout:g}s")
+            with job.lock:
+                if job.state == "queued":
+                    # Never reached the device: drop it so it cannot print
+                    # later, after the caller has already been told it failed.
+                    job.state = "cancelled"
+                    raise PrinterError(
+                        f"printer busy; job cancelled after {timeout:g}s in queue"
+                    )
+            if not job.done.is_set():
+                raise PrinterError(f"printer did not respond within {timeout:g}s")
         if job.error is not None:
             raise job.error
 
@@ -119,6 +130,10 @@ class PrinterWriter:
             job = self._queue.get()
             if job is None:
                 return
+            with job.lock:
+                if job.state == "cancelled":
+                    continue
+                job.state = "writing"
             try:
                 send_to_device(job.lines, job.config)
             except PrinterError as exc:
@@ -126,6 +141,7 @@ class PrinterWriter:
             except Exception as exc:  # pragma: no cover - defensive
                 job.error = PrinterError(str(exc))
             finally:
+                job.state = "done"
                 job.done.set()
 
     def stop(self) -> None:

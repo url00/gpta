@@ -152,6 +152,34 @@ class PrinterSafetyTests(unittest.TestCase):
         finally:
             writer.stop()
 
+    def test_timed_out_queued_job_never_prints(self):
+        writer = PrinterWriter()
+        release = threading.Event()
+        printed = []
+
+        def blocking_send(lines, config):
+            printed.append(lines[0])
+            if lines[0] == "first":
+                release.wait(2)
+
+        try:
+            with patch("gpta.printer.send_to_device", side_effect=blocking_send):
+                first = threading.Thread(
+                    target=lambda: writer.print(["first"], {}, timeout=2)
+                )
+                first.start()
+                while not printed:
+                    time.sleep(0.01)
+                with self.assertRaises(PrinterError) as caught:
+                    writer.print(["second"], {}, timeout=0.05)
+                self.assertIn("cancelled", str(caught.exception))
+                release.set()
+                first.join(2)
+                writer.print(["third"], {}, timeout=2)
+        finally:
+            writer.stop()
+        self.assertEqual(printed, ["first", "third"])
+
 
 if __name__ == "__main__":
     unittest.main()
