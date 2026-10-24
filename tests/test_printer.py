@@ -9,7 +9,7 @@ from unittest.mock import patch
 from gpta.config import ConfigStore
 from gpta.logbus import LogBus
 from gpta.module_api import Block, Module
-from gpta.printer import (
+from gpta.printing import (
     PrinterError,
     PrinterRateLimited,
     PrinterWriter,
@@ -75,7 +75,7 @@ class PrinterSafetyTests(unittest.TestCase):
                 active -= 1
 
         self.enable_printer()
-        with patch("gpta.printer.send_to_device", side_effect=slow_send):
+        with patch("gpta.printing.transport.send_to_device", side_effect=slow_send):
             first = threading.Thread(target=self.service.run_module, args=("fake",))
             second = threading.Thread(target=self.service.test_printer)
             first.start()
@@ -87,7 +87,7 @@ class PrinterSafetyTests(unittest.TestCase):
 
     def test_minimum_spacing_skips_autoprint(self):
         self.enable_printer(min_print_spacing_seconds=30)
-        with patch("gpta.printer.send_to_device") as send:
+        with patch("gpta.printing.transport.send_to_device") as send:
             first = self.service.run_module("fake")
             second = self.service.run_module("fake")
         self.assertTrue(first["printed"])
@@ -96,7 +96,7 @@ class PrinterSafetyTests(unittest.TestCase):
 
     def test_hourly_cap_skips_autoprint(self):
         self.enable_printer(max_prints_per_hour=1)
-        with patch("gpta.printer.send_to_device") as send:
+        with patch("gpta.printing.transport.send_to_device") as send:
             first = self.service.run_module("fake")
             second = self.service.run_module("fake")
         self.assertTrue(first["printed"])
@@ -105,7 +105,7 @@ class PrinterSafetyTests(unittest.TestCase):
 
     def test_manual_test_print_rate_limited(self):
         self.enable_printer(min_print_spacing_seconds=30)
-        with patch("gpta.printer.send_to_device"):
+        with patch("gpta.printing.transport.send_to_device"):
             self.service.test_printer()
             with self.assertRaises(PrinterRateLimited) as caught:
                 self.service.test_printer()
@@ -114,7 +114,7 @@ class PrinterSafetyTests(unittest.TestCase):
     def test_consecutive_failures_trip_circuit_breaker(self):
         self.enable_printer(failure_threshold=2)
         with patch(
-            "gpta.printer.send_to_device", side_effect=PrinterError("offline")
+            "gpta.printing.transport.send_to_device", side_effect=PrinterError("offline")
         ):
             self.service.run_module("fake")
             self.assertTrue(self.store.snapshot()["printer"]["enabled"])
@@ -144,7 +144,7 @@ class PrinterSafetyTests(unittest.TestCase):
     def test_writer_deadline(self):
         writer = PrinterWriter()
         try:
-            with patch("gpta.printer.send_to_device", side_effect=lambda *a: time.sleep(0.5)):
+            with patch("gpta.printing.transport.send_to_device", side_effect=lambda *a: time.sleep(0.5)):
                 started = time.monotonic()
                 with self.assertRaises(PrinterError):
                     writer.print(["hello"], {"device": "/dev/null"}, timeout=0.05)
@@ -163,7 +163,7 @@ class PrinterSafetyTests(unittest.TestCase):
                 release.wait(2)
 
         try:
-            with patch("gpta.printer.send_to_device", side_effect=blocking_send):
+            with patch("gpta.printing.transport.send_to_device", side_effect=blocking_send):
                 first = threading.Thread(
                     target=lambda: writer.print(["first"], {}, timeout=2)
                 )

@@ -11,14 +11,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .config import ConfigError
-from .printer import PrinterError, PrinterRateLimited
-from .service import (
-    AlreadyRunning,
-    NotFound,
-    PrinterDisabled,
-    Service,
-    ValidationError,
-)
+from .errors import AlreadyRunning, NotFound
+from .printing import PrinterDisabled, PrinterError, PrinterRateLimited
+from .service import Service
 
 log = logging.getLogger("gpta.httpserver")
 
@@ -30,7 +25,11 @@ WILDCARD_HOSTS = {"", "0.0.0.0", "::"}
 
 
 class Forbidden(Exception):
-    pass
+    """Request rejected by the Host or Origin check (403)."""
+
+
+class ValidationError(Exception):
+    """Malformed request (400)."""
 
 
 def _hostname(value: str) -> str:

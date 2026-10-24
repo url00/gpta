@@ -8,8 +8,9 @@ from unittest.mock import patch
 from gpta.config import ConfigStore
 from gpta.logbus import LogBus
 from gpta.module_api import Block, FetchError, Module
-from gpta.printer import PrinterError
-from gpta.service import AlreadyRunning, Service
+from gpta.printing import PrinterError
+from gpta.errors import AlreadyRunning
+from gpta.service import Service
 
 
 class FakeModule(Module):
@@ -109,9 +110,9 @@ class ServiceTests(unittest.TestCase):
     def test_tick_respects_enabled(self):
         self.service.tick()
         self.assertTrue(self.service.wait_for_idle(1))
-        self.assertEqual(self.service._runtime["fake"].run_count, 0)
+        self.assertEqual(self.service.runner._runtime["fake"].run_count, 0)
         self.run_scheduled("fake")
-        self.assertEqual(self.service._runtime["fake"].run_count, 1)
+        self.assertEqual(self.service.runner._runtime["fake"].run_count, 1)
         self.assertIn("hello", self.service.output_text("total"))
 
     def test_tick_dispatches_without_waiting(self):
@@ -122,12 +123,12 @@ class ServiceTests(unittest.TestCase):
         elapsed = time.monotonic() - started
         self.assertLess(elapsed, 0.5)
         self.assertTrue(self.service.wait_for_idle(3))
-        self.assertEqual(self.service._runtime["fake"].run_count, 1)
-        self.assertFalse(self.service._runtime["slow"].last_ok)
-        self.assertIn("timeout after", self.service._runtime["slow"].last_error)
+        self.assertEqual(self.service.runner._runtime["fake"].run_count, 1)
+        self.assertFalse(self.service.runner._runtime["slow"].last_ok)
+        self.assertIn("timeout after", self.service.runner._runtime["slow"].last_error)
 
     def test_timeout_bounds_worker_and_recovers(self):
-        self.service.fetch_timeout = 0.1
+        self.service.runner.fetch_timeout = 0.1
         started = time.monotonic()
         result = self.service.run_module("slow")
         elapsed = time.monotonic() - started
@@ -139,7 +140,7 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("still executing", stuck["error"])
 
         self.registry["slow"].release.set()
-        worker = self.service._stuck["slow"]
+        worker = self.service.runner._stuck["slow"]
         worker.join(2)
         result = self.service.run_module("slow")
         self.assertTrue(result["ok"])
@@ -153,13 +154,13 @@ class ServiceTests(unittest.TestCase):
                 "failure_threshold": 10,
             }
         )
-        with patch("gpta.printer.send_to_device") as send:
+        with patch("gpta.printing.transport.send_to_device") as send:
             result = self.service.run_module("fake")
         self.assertTrue(result["printed"])
         send.assert_called_once()
         self.assertTrue(self.service.snapshot()["printer"]["last_job"])
         with patch(
-            "gpta.printer.send_to_device", side_effect=PrinterError("no device")
+            "gpta.printing.transport.send_to_device", side_effect=PrinterError("no device")
         ):
             result = self.service.run_module("fake")
         self.assertTrue(result["ok"])
@@ -179,7 +180,7 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(module["runtime"]["last_ok"])
 
     def test_concurrent_run_rejected(self):
-        self.service._runtime["fake"].running = True
+        self.service.runner._runtime["fake"].running = True
         with self.assertRaises(AlreadyRunning):
             self.service.run_module("fake")
 
@@ -219,19 +220,19 @@ class ServiceTests(unittest.TestCase):
             self.store.update_module("fake", {"enabled": True})
             service.tick()
             self.assertTrue(service.wait_for_idle(2))
-            self.assertEqual(service._runtime["fake"].run_count, 1)
+            self.assertEqual(service.runner._runtime["fake"].run_count, 1)
 
             mono[0] += 1.0
             wall[0] -= 86400  # backwards wall-clock jump
             service.tick()
             self.assertTrue(service.wait_for_idle(1))
-            self.assertEqual(service._runtime["fake"].run_count, 1)
+            self.assertEqual(service.runner._runtime["fake"].run_count, 1)
 
             mono[0] += 61.0
             wall[0] += 86400
             service.tick()
             self.assertTrue(service.wait_for_idle(2))
-            self.assertEqual(service._runtime["fake"].run_count, 2)
+            self.assertEqual(service.runner._runtime["fake"].run_count, 2)
         finally:
             service.stop()
 
@@ -244,8 +245,8 @@ class ServiceTests(unittest.TestCase):
             fetch_timeout=1.0,
         )
         try:
-            emitter = service._make_emitter("fake")
-            with patch("gpta.service.Service._log", side_effect=lambda *a, **k: messages.append(a)):
+            emitter = service.runner._make_emitter("fake")
+            with patch("gpta.runner.module_log", side_effect=lambda *a, **k: messages.append(a)):
                 for index in range(105):
                     emitter(f"line {index}")
             self.assertEqual(len(messages), 101)

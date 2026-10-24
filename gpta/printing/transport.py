@@ -12,18 +12,13 @@ import os
 import queue
 import stat
 import threading
-from datetime import datetime, timezone
 from typing import Any, Sequence
 
-from .renderer import ascii_safe, to_escpos
+from ..renderer import to_escpos
 
 
 class PrinterError(Exception):
     pass
-
-
-class PrinterRateLimited(PrinterError):
-    """A physical print was suppressed by the rate limiter."""
 
 
 def _escpos_bytes(lines: Sequence[str], config: dict[str, Any]) -> bytes:
@@ -151,18 +146,3 @@ class PrinterWriter:
             return
         self._queue.put(None)
         thread.join(timeout=1.0)
-
-
-def test_receipt(width: int = 32) -> list[str]:
-    width = max(1, int(width))
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    return [
-        ascii_safe("GPTA PRINTER TEST").center(width),
-        "-" * width,
-        "",
-        "If you can read this,",
-        "the printer transport works.",
-        "",
-        stamp.center(width),
-        "-" * width,
-    ]
