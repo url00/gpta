@@ -152,8 +152,8 @@ limits.
 | PATCH | `/api/modules/<id>` | Update `enabled`, `interval_seconds`, `limits`, `options` |
 | POST | `/api/modules/<id>/run` | Run now (prints if auto-print is on) |
 | PATCH | `/api/printer` | Update printer settings |
-| POST | `/api/instant/preview` | Image of `{"text", "size"}` as an instant print would draw it (`png` data URL) |
-| POST | `/api/instant/print` | Print `{"text", "size", "layout"}` once; text up to 5000 characters. `size` (here and for web pages) is `tiny`, `small`, `compact`, `body`, `large` or `huge`: 12–36 px body text. `layout` (both too) is `single`, `double` (two columns with a centre rule) or `triple` (three, no rules): columns are split between lines, in bands of at most about 15 cm, with headings, rules and a web page's header kept full width |
+| POST | `/api/instant/preview` | Image of `{"text", "size", "layout", "format"}` as an instant print would draw it (`png` data URL), with `chars` and `paper_mm` (paper length) |
+| POST | `/api/instant/print` | Print `{"text", "size", "layout", "format"}` once; text up to 150,000 characters (requests up to 1 MB). `format` is `plain` (default) or `markdown`: headings, lists, task lists, quotes, code, tables, rules and **bold**. `size` (here and for web pages) is `tiny`, `small`, `compact`, `body`, `large` or `huge`: 12–36 px body text. `layout` (both too) is `single`, `double` (two columns with a centre rule) or `triple` (three, no rules): columns are split between lines, in bands of at most about 15 cm, with headings, rules and a web page's header kept full width |
 | POST | `/api/reader/fetch` | Fetch `{"url", "size", "layout"}` reader-mode style and lay out the whole page. Returns an `id` for printing, a `png` preview, `chars` (characters that will print), `total` (the page's characters; more than `chars` only past the 150,000 safety cap) and `paper_mm` (paper length). Public http(s) sites only |
 | POST | `/api/reader/print` | Print `{"id", "size", "layout"}` from a recent fetch, exactly as previewed. The last 8 fetches are kept, until a restart |
 | POST | `/api/printer/test` | Print a test page |

@@ -30,7 +30,7 @@
         <h2>Instant print</h2>
         <p class="desc">Paste or type anything. It wraps to the paper width and prints once.</p>
         <label class="field" for="instant-text">Text</label>
-        <textarea id="instant-text" rows="10" maxlength="5000" spellcheck="true" placeholder="Paste text here"></textarea>
+        <textarea id="instant-text" rows="10" spellcheck="true" placeholder="Paste text here"></textarea>
         <div class="instant-controls">
           <label class="field">Size
             <select id="instant-size">
@@ -42,6 +42,12 @@
               <option value="huge">Huge (36px)</option>
             </select>
           </label>
+          <label class="field">Format
+            <select id="instant-format">
+              <option value="plain" selected>Plain text</option>
+              <option value="markdown">Markdown</option>
+            </select>
+          </label>
           <label class="field">Layout
             <select id="instant-layout">
               <option value="single" selected>One column</option>
@@ -49,7 +55,7 @@
               <option value="triple">Three columns</option>
             </select>
           </label>
-          <span id="instant-count" class="meta">0 / 5000</span>
+          <span id="instant-count" class="meta">0 characters</span>
         </div>
         <div class="actions">
           <button id="instant-print" type="button">Print</button>
@@ -101,16 +107,6 @@
           <button id="reader-print" type="button" disabled>Print page</button>
         </div>
         <p id="reader-note" class="card-note"></p>
-        <dialog id="reader-confirm" class="confirm" aria-labelledby="reader-confirm-title">
-          <form method="dialog">
-            <h2 id="reader-confirm-title">Long print</h2>
-            <p id="reader-confirm-text"></p>
-            <div class="actions">
-              <button value="print" type="submit">Print anyway</button>
-              <button value="cancel" type="submit" class="secondary" autofocus>Cancel</button>
-            </div>
-          </form>
-        </dialog>
       </section>
     </section>
 
@@ -181,6 +177,17 @@
       <ul id="log-list" class="logs" aria-live="off"></ul>
     </section>
   </main>
+
+  <dialog id="confirm-print" class="confirm" aria-labelledby="confirm-print-title">
+    <form method="dialog">
+      <h2 id="confirm-print-title">Long print</h2>
+      <p id="confirm-print-text"></p>
+      <div class="actions">
+        <button value="print" type="submit">Print anyway</button>
+        <button value="cancel" type="submit" class="secondary" autofocus>Cancel</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="/static/app.js"></script>
 </body>

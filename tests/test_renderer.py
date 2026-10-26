@@ -38,6 +38,7 @@ ALL_KINDS = [
     Heading("Heading"),
     Text("A paragraph of body text that is long enough to wrap.", align="center"),
     Text("small print", size="small", bold=True),
+    Text("mixed **bold** words", bold_spans=((6, 10), (15, 20))),
     Rule(),
     Checkbox("Water the plants", value="Oct 20", note="the big fern too"),
     Checkbox("A done task with a long title that has to wrap", checked=True),
@@ -81,6 +82,10 @@ class BlockTests(unittest.TestCase):
             {"kind": "bar_chart", "bars": [{"label": "a", "value": "x"}]},
             {"kind": "key_value", "label": 1, "value": "x"},
             {"kind": "qr", "data": ""},
+            {"kind": "text", "text": "ab", "bold_spans": [[0, 3]]},
+            {"kind": "text", "text": "ab", "bold_spans": [[1, 1]]},
+            {"kind": "text", "text": "ab", "bold_spans": "01"},
+            {"kind": "text", "text": "ab", "bold_spans": [["0", 1]]},
             {"kind": "qr", "data": "x" * 1001},
             "text",
         ):
@@ -259,6 +264,36 @@ class ImageTests(unittest.TestCase):
         self.assertIn(
             f"[QR: {url}]", "\n".join(render_text(Receipt("", (QrCode(url),), ""), 80))
         )
+
+    def test_bold_spans(self):
+        def draw(**kwargs):
+            text = Text("plain then bold then plain", **kwargs)
+            return render_image(Receipt("", (text,), ""), 576)
+
+        plain, mixed, bold = draw(), draw(bold_spans=((11, 15),)), draw(bold=True)
+        self.assertEqual(plain.size, mixed.size)
+        self.assertLess(black_dots(plain), black_dots(mixed))
+        self.assertLess(black_dots(mixed), black_dots(bold))
+        # Only the bold word changes; the text around it stays put.
+        diff = [
+            x
+            for x in range(576)
+            for y in range(plain.height)
+            if plain.getpixel((x, y)) != mixed.getpixel((x, y))
+        ]
+        char = 576 // 40  # 24px DejaVu Sans Mono is about 14.4 px a character
+        self.assertGreater(min(diff), 8 + 10 * char)
+        self.assertLess(max(diff), 8 + 16 * char)
+        # Plain blocks still save without the field.
+        self.assertNotIn("bold_spans", block_to_dict(Text("x")))
+
+    def test_leading_spaces_kept(self):
+        lines = render_image(Receipt("", (Text("x\n    x"),), ""), 576).convert("L")
+        box = [
+            lines.crop((0, y0, 576, y0 + 30)).point(lambda v: 255 - v).getbbox()
+            for y0 in (8, 8 + 29)
+        ]
+        self.assertGreater(box[1][0] - box[0][0], 50)
 
     def test_checkbox_text(self):
         lines = render_text(

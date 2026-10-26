@@ -71,7 +71,11 @@ class Heading:
 
 @dataclass(frozen=True)
 class Text:
-    """A wrapped paragraph. ``size`` is small, body, large, or huge."""
+    """A wrapped paragraph. ``size`` is small, body, large, or huge.
+
+    ``bold_spans`` sets parts of the text in bold: ``(start, end)`` character
+    ranges, end exclusive, like slices of ``text``.
+    """
 
     kind: ClassVar[str] = "text"
 
@@ -79,6 +83,7 @@ class Text:
     size: str = "body"
     bold: bool = False
     align: str = "left"
+    bold_spans: tuple[tuple[int, int], ...] = ()
 
     def __post_init__(self) -> None:
         _str(self.text, "Text.text")
@@ -86,6 +91,21 @@ class Text:
         _choice(self.align, "Text.align", ALIGNS)
         if not isinstance(self.bold, bool):
             raise TypeError("Text.bold must be true or false")
+        if isinstance(self.bold_spans, str):
+            raise TypeError("Text.bold_spans must be a list of [start, end] pairs")
+        spans = []
+        for span in self.bold_spans:
+            if (
+                isinstance(span, str)
+                or len(span) != 2
+                or not all(type(n) is int for n in span)
+            ):
+                raise TypeError("Text.bold_spans must be a list of [start, end] pairs")
+            start, end = span
+            if not 0 <= start < end <= len(self.text):
+                raise ValueError("Text.bold_spans must fall inside the text")
+            spans.append((start, end))
+        object.__setattr__(self, "bold_spans", tuple(spans))
 
 
 @dataclass(frozen=True)
@@ -244,6 +264,10 @@ def to_dict(element: Element) -> dict[str, Any]:
             ]
         elif item.name == "meta":
             value = _jsonable(value)
+        elif item.name == "bold_spans":
+            if not value:
+                continue  # plain text stays as it was saved before spans
+            value = [list(span) for span in value]
         data[item.name] = value
     return data
 

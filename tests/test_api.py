@@ -322,11 +322,24 @@ class ApiTests(unittest.TestCase):
             )[1]
         )
         self.assertGreater(preview["height_px"], small["height_px"])
+        self.assertEqual(preview["chars"], 13)
+        self.assertEqual(preview["paper_mm"], round(preview["height_px"] / 8))
+        # Instant routes take long pastes; other routes keep the small limit.
+        big = {"text": "word " * 20_000, "format": "rich"}  # 100 kB
+        status, body, _ = self.request("POST", "/api/instant/preview", big)
+        self.assertEqual(
+            (status, json.loads(body)["error"]),
+            (400, "format must be one of plain, markdown"),
+        )
+        status, body, _ = self.request("POST", "/api/reader/fetch", big)
+        self.assertEqual(
+            (status, json.loads(body)["error"]), (400, "request body too large")
+        )
         for bad in (
             {},
             {"text": "  \n "},
             {"text": "x", "size": "giant"},
-            {"text": "x" * 5001},
+            {"text": "x" * 150_001},
             {"text": 5},
         ):
             status, _, _ = self.request("POST", "/api/instant/preview", bad)
@@ -341,6 +354,19 @@ class ApiTests(unittest.TestCase):
             "POST", "/api/instant/preview", {"text": "x", "layout": "quad"}
         )
         self.assertEqual(status, 400)
+        status, body, _ = self.request(
+            "POST",
+            "/api/instant/preview",
+            {"text": "# List\n- **one**\n- two", "format": "markdown"},
+        )
+        self.assertEqual(status, 200, body)
+        for bad in (
+            {"text": "x", "format": "html"},
+            {"text": "\n---\n", "format": "plain", "layout": "x"},
+            {"text": "```\n```", "format": "markdown"},
+        ):
+            status, _, _ = self.request("POST", "/api/instant/preview", bad)
+            self.assertEqual(status, 400, bad)
         # The printer is disabled in these tests.
         status, _, _ = self.request("POST", "/api/instant/print", {"text": "hi"})
         self.assertEqual(status, 409)

@@ -21,6 +21,9 @@ from .service import Service
 log = logging.getLogger("gpta.httpserver")
 
 MAX_BODY = 64 * 1024
+# Instant prints carry the pasted text itself (up to 150,000 characters).
+LARGE_BODY_PATHS = {"/api/instant/preview", "/api/instant/print"}
+MAX_LARGE_BODY = 1024 * 1024
 STATE_CHANGING = {"POST", "PATCH"}
 
 
@@ -340,7 +343,9 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.close_connection = True
             raise ValidationError("invalid Content-Length") from exc
-        if length < 0 or length > MAX_BODY:
+        path = urllib.parse.urlsplit(self.path).path
+        limit = MAX_LARGE_BODY if path in LARGE_BODY_PATHS else MAX_BODY
+        if length < 0 or length > limit:
             self.close_connection = True
             raise ValidationError("request body too large")
         self._body = self.rfile.read(length) if length else b""

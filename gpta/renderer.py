@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 import struct
 import textwrap
 import threading
@@ -131,6 +132,20 @@ def clean_text(text: object) -> str:
     return "".join(out)
 
 
+def _clean_spans(text: str, spans: Sequence[tuple[int, int]]) -> tuple[str, list[bool]]:
+    """:func:`clean_text` of ``text``, with a bold flag per character of the
+    result. Each stretch is cleaned on its own, since cleaning can change
+    the length."""
+    cuts = sorted({0, len(text), *(n for span in spans for n in span)})
+    pieces, flags = [], []
+    for a, b in zip(cuts, cuts[1:], strict=False):
+        piece = clean_text(text[a:b])
+        heavy = any(start <= a and b <= end for start, end in spans)
+        pieces.append(piece)
+        flags.extend([heavy] * len(piece))
+    return "".join(pieces), flags
+
+
 def wrap_text(text: object, width: int) -> list[str]:
     """Wrap to ``width`` characters, keeping blank lines between paragraphs."""
     width = max(1, int(width))
@@ -214,7 +229,14 @@ def _cut(element: Element, budget: int) -> Element | None:
     if isinstance(element, Text):
         if not budget:
             return None
-        return Text(element.text[:budget], element.size, element.bold, element.align)
+        spans = tuple(
+            (start, min(end, budget))
+            for start, end in element.bold_spans
+            if start < budget
+        )
+        return Text(
+            element.text[:budget], element.size, element.bold, element.align, spans
+        )
     return None
 
 
@@ -449,30 +471,49 @@ def _line_height(face: ImageFont.FreeTypeFont) -> int:
 
 def _wrap_px(text: str, face: ImageFont.FreeTypeFont, width: int) -> list[str]:
     """Wrap ``text`` (already cleaned) so each line fits ``width`` pixels."""
-    lines: list[str] = []
+    return [_join(text, line) for line in _wrap_ranges(text, face, width)]
+
+
+Ranges = list[tuple[int, int]]
+
+
+def _join(text: str, ranges: Ranges) -> str:
+    return " ".join(text[a:b] for a, b in ranges)
+
+
+def _wrap_ranges(text: str, face: ImageFont.FreeTypeFont, width: int) -> list[Ranges]:
+    """Wrapped lines of ``text`` as the ``(start, end)`` ranges of their
+    words, printed joined by single spaces. A line's leading spaces stay
+    with its first word, so indented text (such as code) keeps its shape."""
+    lines: list[Ranges] = []
+    base = 0
     for paragraph in text.split("\n"):
-        words = paragraph.split()
+        words = [(m.start() + base, m.end() + base) for m in _WORD.finditer(paragraph)]
+        if words and paragraph.startswith(" "):
+            words[0] = (base, words[0][1])
+        base += len(paragraph) + 1
         if not words:
-            lines.append("")
+            lines.append([])
             continue
-        line = ""
-        for word in words:
-            candidate = f"{line} {word}" if line else word
-            if face.getlength(candidate) <= width:
-                line = candidate
+        line: Ranges = []
+        for a, b in words:
+            if face.getlength(_join(text, [*line, (a, b)])) <= width:
+                line.append((a, b))
                 continue
             if line:
                 lines.append(line)
-            line = ""
-            while face.getlength(word) > width:
-                cut = len(word)
-                while cut > 1 and face.getlength(word[:cut]) > width:
+            while face.getlength(text[a:b]) > width:
+                cut = b - a
+                while cut > 1 and face.getlength(text[a : a + cut]) > width:
                     cut -= 1
-                lines.append(word[:cut])
-                word = word[cut:]
-            line = word
+                lines.append([(a, a + cut)])
+                a += cut
+            line = [(a, b)]
         lines.append(line)
     return lines
+
+
+_WORD = re.compile(r"\S+")
 
 
 def _fit(text: str, face: ImageFont.FreeTypeFont, width: int) -> str:
@@ -516,25 +557,71 @@ class _Layout:
         self.y += height
 
     def text(
-        self, text: str, size: int, *, bold: bool = False, align: str = "left"
+        self,
+        text: str,
+        size: int,
+        *,
+        bold: bool = False,
+        align: str = "left",
+        spans: Sequence[tuple[int, int]] = (),
     ) -> None:
+        """Wrapped ``text``; ``spans`` are character ranges set in bold."""
         face = font(size, bold)
         height = _line_height(face)
-        for line in _wrap_px(clean_text(text), face, self.inner):
+        if spans and not bold:
+            cleaned, flags = _clean_spans(text, spans)
+        else:
+            cleaned, flags = clean_text(text), None
+        for ranges in _wrap_ranges(cleaned, face, self.inner):
+            line = _join(cleaned, ranges)
             if not line:
                 self.add(height // 2)
                 continue
-            self.add(height, self._painter(line, face, align))
+            if flags is None:
+                self.add(height, self._painter(line, face, align))
+                continue
+            line_flags: list[bool] = []
+            for index, (a, b) in enumerate(ranges):
+                if index:  # the joining space is bold inside a bold run
+                    line_flags.append(flags[a - 1])
+                line_flags.extend(flags[a:b])
+            self.add(height, self._rich_painter(line, line_flags, size, align))
+
+    def _rich_painter(
+        self, line: str, flags: list[bool], size: int, align: str
+    ) -> Paint:
+        """Like :meth:`_painter`, switching to bold where ``flags`` say. The
+        font is monospaced and its bold face has the same advance, so
+        positions come from the regular face."""
+        regular, heavy = font(size), font(size, True)
+        x = self._painter_x(line, regular, align)
+        runs: list[tuple[float, str, Any]] = []
+        start = 0
+        for index in range(1, len(line) + 1):
+            if index == len(line) or flags[index] != flags[start]:
+                face = heavy if flags[start] else regular
+                runs.append(
+                    (x + regular.getlength(line[:start]), line[start:index], face)
+                )
+                start = index
+
+        def paint(draw, y):
+            for left, piece, face in runs:
+                draw.text((left, y), piece, font=face, fill=0)
+
+        return paint
 
     def _painter(self, line: str, face, align: str) -> Paint:
+        x = self._painter_x(line, face, align)
+        return lambda draw, y: draw.text((x, y), line, font=face, fill=0)
+
+    def _painter_x(self, line: str, face, align: str) -> float:
         length = face.getlength(line)
         if align == "center":
-            x = self.left + (self.inner - length) / 2
-        elif align == "right":
-            x = self.right - length
-        else:
-            x = self.left
-        return lambda draw, y: draw.text((x, y), line, font=face, fill=0)
+            return self.left + (self.inner - length) / 2
+        if align == "right":
+            return self.right - length
+        return self.left
 
     def rule(self, thickness: int, *, full: bool = False) -> None:
         x0, x1 = (0, self.width - 1) if full else (self.left, self.right - 1)
@@ -585,7 +672,11 @@ def _layout_element(out: _Layout, element: Any) -> None:
             "huge": theme.title,
         }
         out.text(
-            element.text, size[element.size], bold=element.bold, align=element.align
+            element.text,
+            size[element.size],
+            bold=element.bold,
+            align=element.align,
+            spans=element.bold_spans,
         )
     elif isinstance(element, Rule):
         out.rule(4 if element.heavy else 2)

@@ -593,19 +593,51 @@ function bindPrinterControls() {
 }
 
 // ---- instant print ---------------------------------------------------
+// ---- long prints -----------------------------------------------------
+// Instant text and web pages print whole. Over CONFIRM_CHARS characters,
+// a dialog asks first, since they use a lot of paper.
+const CONFIRM_CHARS = 40000;
+const confirmDialog = document.getElementById("confirm-print");
+const confirmText = document.getElementById("confirm-print-text");
+
+function paperLength(mm) {
+  return mm >= 1000 ? `${(mm / 1000).toFixed(1)} m` : `${Math.max(1, Math.round(mm / 10))} cm`;
+}
+
+// Resolves true to print: at once for short prints, else when confirmed.
+// ``what`` names the print, e.g. "This page"; ``print`` has chars, paper_mm.
+function confirmLongPrint(what, print) {
+  if (print.chars <= CONFIRM_CHARS) return Promise.resolve(true);
+  confirmText.textContent =
+    `${what} is ${print.chars.toLocaleString()} characters long and will use ` +
+    `about ${paperLength(print.paper_mm)} of paper. Print all of it?`;
+  confirmDialog.returnValue = "";
+  confirmDialog.showModal();
+  return new Promise((resolve) => {
+    confirmDialog.addEventListener("close", () => resolve(confirmDialog.returnValue === "print"), { once: true });
+  });
+}
+
 const INSTANT_DRAFT_KEY = "gpta.instant";
 const instantText = document.getElementById("instant-text");
 const instantSize = document.getElementById("instant-size");
 const instantLayout = document.getElementById("instant-layout");
+const instantFormat = document.getElementById("instant-format");
 const instantImg = document.getElementById("instant-img");
 const instantEmpty = document.getElementById("instant-empty");
 const instantNote = document.getElementById("instant-note");
 let instantTimer = null;
 let instantSeq = 0;      // drops preview responses that arrive out of order
 let instantPaper = null; // paper width the preview was drawn for
+let instantShown = null; // the last preview, with the request it answers
 
 function instantBody() {
-  return { text: instantText.value, size: instantSize.value, layout: instantLayout.value };
+  return {
+    text: instantText.value,
+    size: instantSize.value,
+    layout: instantLayout.value,
+    format: instantFormat.value,
+  };
 }
 
 function saveInstantDraft() {
@@ -616,26 +648,49 @@ function loadInstantDraft() {
   try {
     const draft = JSON.parse(localStorage.getItem(INSTANT_DRAFT_KEY) || "null");
     if (draft && typeof draft.text === "string") instantText.value = draft.text;
-    for (const [select, value] of [[instantSize, draft && draft.size], [instantLayout, draft && draft.layout]]) {
+    const saved = [
+      [instantSize, draft && draft.size],
+      [instantLayout, draft && draft.layout],
+      [instantFormat, draft && draft.format],
+    ];
+    for (const [select, value] of saved) {
       if ([...select.options].some((o) => o.value === value)) select.value = value;
     }
   } catch { /* nothing saved */ }
 }
 
+function showInstantCount(preview) {
+  const chars = `${instantText.value.length.toLocaleString()} characters`;
+  document.getElementById("instant-count").textContent = preview
+    ? `${chars} · about ${paperLength(preview.paper_mm)} of paper`
+    : chars;
+}
+
+// The preview for the current text and settings, fetched if needed.
+async function currentInstantPreview() {
+  const body = instantBody();
+  const key = JSON.stringify(body);
+  if (instantShown && instantShown.key === key) return instantShown.preview;
+  const preview = await api("/api/instant/preview", { method: "POST", body });
+  instantShown = { key, preview };
+  return preview;
+}
+
 async function updateInstantPreview() {
   const seq = ++instantSeq;
-  document.getElementById("instant-count").textContent = `${instantText.value.length} / ${instantText.maxLength}`;
+  showInstantCount(null);
   if (!instantText.value.trim()) {
     instantImg.hidden = true;
     instantEmpty.hidden = false;
     return;
   }
   try {
-    const preview = await api("/api/instant/preview", { method: "POST", body: instantBody() });
+    const preview = await currentInstantPreview();
     if (seq !== instantSeq) return;
     instantImg.src = preview.png;
     instantImg.hidden = false;
     instantEmpty.hidden = true;
+    showInstantCount(preview);
   } catch (error) {
     if (seq === instantSeq) showBanner(error.message);
   }
@@ -662,10 +717,15 @@ function bindInstant() {
   instantText.addEventListener("input", scheduleInstantPreview);
   instantSize.addEventListener("change", scheduleInstantPreview);
   instantLayout.addEventListener("change", scheduleInstantPreview);
+  instantFormat.addEventListener("change", scheduleInstantPreview);
   const print = document.getElementById("instant-print");
   print.addEventListener("click", () => {
     busy(print, async () => {
       if (!instantText.value.trim()) throw new Error("Nothing to print yet.");
+      if (instantText.value.length > CONFIRM_CHARS) {
+        const preview = await currentInstantPreview();
+        if (!(await confirmLongPrint("This text", preview))) return;
+      }
       await api("/api/instant/print", { method: "POST", body: instantBody() });
       instantNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.`;
       await refresh();
@@ -680,9 +740,7 @@ function bindInstant() {
 }
 
 // ---- reader mode -----------------------------------------------------
-// Whole pages print. Pages over READER_CONFIRM_CHARS ask first, since they
-// use a lot of paper.
-const READER_CONFIRM_CHARS = 40000;
+// Whole pages print; long ones ask first (see confirmLongPrint).
 const readerUrl = document.getElementById("reader-url");
 const readerSize = document.getElementById("reader-size");
 const readerLayout = document.getElementById("reader-layout");
@@ -691,31 +749,13 @@ const readerEmpty = document.getElementById("reader-empty");
 const readerMeta = document.getElementById("reader-meta");
 const readerNote = document.getElementById("reader-note");
 const readerPrint = document.getElementById("reader-print");
-const readerConfirm = document.getElementById("reader-confirm");
-const readerConfirmText = document.getElementById("reader-confirm-text");
 let readerPage = null; // the fetched page the preview shows; printed as-is
-
-function paperLength(mm) {
-  return mm >= 1000 ? `${(mm / 1000).toFixed(1)} m` : `${Math.max(1, Math.round(mm / 10))} cm`;
-}
 
 function readerSummary(page) {
   const chars = page.chars < page.total
     ? `the first ${page.chars.toLocaleString()} of ${page.total.toLocaleString()} characters`
     : `${page.chars.toLocaleString()} characters`;
   return `${chars} · about ${paperLength(page.paper_mm)} of paper`;
-}
-
-// Resolves true when the operator confirms a long print.
-function confirmLongPrint(page) {
-  readerConfirmText.textContent =
-    `This page is ${page.chars.toLocaleString()} characters long and will use ` +
-    `about ${paperLength(page.paper_mm)} of paper. Print all of it?`;
-  readerConfirm.returnValue = "";
-  readerConfirm.showModal();
-  return new Promise((resolve) => {
-    readerConfirm.addEventListener("close", () => resolve(readerConfirm.returnValue === "print"), { once: true });
-  });
 }
 
 function showReaderPage(page) {
@@ -756,7 +796,7 @@ function bindReader() {
     busy(readerPrint, async () => {
       if (!readerPage) throw new Error("Fetch a page first.");
       const page = readerPage;
-      if (page.chars > READER_CONFIRM_CHARS && !(await confirmLongPrint(page))) return;
+      if (!(await confirmLongPrint("This page", page))) return;
       readerNote.textContent = `Printing ${readerSummary(page)}...`;
       try {
         await api("/api/reader/print", {

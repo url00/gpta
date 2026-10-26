@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__, reader
+from . import __version__, markdown, reader
 from .blocks import Rule, Text, size_of
 from .config import PAPERS, ConfigStore
 from .errors import InvalidRequest, NotFound
@@ -45,7 +45,9 @@ from .scheduler import Scheduler
 from .state import StateStore
 
 #: Longest text the Instant tab may print in one job.
-INSTANT_MAX_CHARS = 5000
+#: Longest Instant text. Like web pages, long text prints whole; this only
+#: guards against runaway pastes (about 15 m of paper at normal size).
+INSTANT_MAX_CHARS = 150_000
 
 
 def print_style(body: dict, elements=()) -> dict[str, Any]:
@@ -69,16 +71,31 @@ def print_size(body: dict) -> float:
     return print_scale(size)
 
 
+#: How Instant text is read: as is, or as Markdown.
+INSTANT_FORMATS = ("plain", "markdown")
+
+
 def instant_receipt(body: Any) -> Receipt:
-    """A one-off receipt of pasted ``text``: no header or footer."""
+    """A one-off receipt of pasted ``text``: no header or footer.
+
+    ``format`` is ``plain`` (the default) or ``markdown``.
+    """
     if not isinstance(body, dict):
         raise InvalidRequest("body must be an object")
     text = body.get("text")
     if not isinstance(text, str) or not text.strip():
         raise InvalidRequest("text must be a non-empty string")
     if len(text) > INSTANT_MAX_CHARS:
-        raise InvalidRequest(f"text is longer than {INSTANT_MAX_CHARS} characters")
-    return Receipt(title="", elements=(Text(text.strip("\n")),), stamp="")
+        raise InvalidRequest(f"text is longer than {INSTANT_MAX_CHARS:,} characters")
+    form = body.get("format", "plain")
+    if form not in INSTANT_FORMATS:
+        raise InvalidRequest(f"format must be one of {', '.join(INSTANT_FORMATS)}")
+    if form == "plain":
+        return Receipt(title="", elements=(Text(text.strip("\n")),), stamp="")
+    elements = markdown.to_blocks(text)
+    if not elements:
+        raise InvalidRequest("the Markdown has nothing to print")
+    return Receipt(title="", elements=tuple(elements), stamp="")
 
 
 #: Longest article text the reader keeps; the rest is cut with a marker.
@@ -197,13 +214,18 @@ class Service:
         """The image an instant print would produce, as a PNG data URL."""
         receipt = instant_receipt(body)
         image = render_image(receipt, self._width_px(), **print_style(body))
-        return {"png": _png_url(image), "height_px": image.height}
+        return {
+            "png": _png_url(image),
+            "height_px": image.height,
+            "paper_mm": round(image.height / DOTS_PER_MM),
+            "chars": len(body["text"]),
+        }
 
     def instant_print(self, body: Any) -> dict[str, Any]:
         receipt = instant_receipt(body)
         image = render_image(receipt, self._width_px(), **print_style(body))
         self.printer.submit(image, "instant", manual=True)
-        module_log(f"instant print: {len(receipt.elements[0].text)} characters")
+        module_log(f"instant print: {len(body['text'])} characters")
         return {"ok": True}
 
     def reader_fetch(self, body: Any) -> dict[str, Any]:
