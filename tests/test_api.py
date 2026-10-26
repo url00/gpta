@@ -338,7 +338,7 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200, body)
         status, _, _ = self.request(
-            "POST", "/api/instant/preview", {"text": "x", "layout": "triple"}
+            "POST", "/api/instant/preview", {"text": "x", "layout": "quad"}
         )
         self.assertEqual(status, 400)
         # The printer is disabled in these tests.

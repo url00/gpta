@@ -708,7 +708,9 @@ def _layout_ruler(out: _Layout) -> None:
     out.add(32, paint)
 
 
-LAYOUTS = ("single", "double")
+LAYOUTS = ("single", "double", "triple")
+#: Columns per layout; only two columns get a dividing rule.
+LAYOUT_COLUMNS = {"single": 1, "double": 2, "triple": 3}
 # Tallest a column may grow before the text continues in a new band below,
 # so a reader never has to travel far back up the paper (about 15 cm).
 COLUMN_BAND_MAX_PX = 1200
@@ -726,12 +728,14 @@ def render_image(
     """``receipt`` as a 1-bit image ``width_px`` dots wide (0 = black).
 
     ``scale`` multiplies every font size (see :func:`print_scale`).
-    ``layout="double"`` sets body text in two columns; the first ``lead``
-    elements (a header), headings, rules and centred text stay full width.
+    ``layout="double"`` or ``"triple"`` sets body text in two or three
+    columns; the first ``lead`` elements (a header), headings, rules and
+    centred text stay full width.
     """
-    if layout == "double":
+    columns = LAYOUT_COLUMNS[layout]
+    if columns > 1:
         with _RENDER_LOCK:
-            return _render_columns(receipt, int(width_px), scale, lead)
+            return _render_columns(receipt, int(width_px), scale, lead, columns)
     with _RENDER_LOCK:
         out = _Layout(int(width_px), scale)
         theme = out.theme
@@ -756,9 +760,9 @@ def _full_width(element: Any) -> bool:
 
 
 def _render_columns(
-    receipt: Receipt, width: int, scale: float, lead: int
+    receipt: Receipt, width: int, scale: float, lead: int, columns: int
 ) -> Image.Image:
-    """Two-column layout: full-width pieces stacked with column bands."""
+    """Column layout: full-width pieces stacked with column bands."""
     theme = theme_for(width, scale)
     pieces: list[Image.Image] = []
     full = _Layout(width, theme=theme, pad=False)
@@ -773,7 +777,7 @@ def _render_columns(
     def flush_run() -> None:
         if run:
             flush_full()
-            pieces.extend(_column_bands(run, width, theme))
+            pieces.extend(_column_bands(run, width, theme, columns))
             run.clear()
 
     if receipt.title:
@@ -805,16 +809,16 @@ def _render_columns(
 
 
 def _column_bands(
-    elements: list[Element], width: int, theme: Theme
+    elements: list[Element], width: int, theme: Theme, columns: int
 ) -> list[Image.Image]:
-    """Lay ``elements`` out in half-width columns, balanced side by side.
+    """Lay ``elements`` out in ``columns`` side-by-side columns, balanced.
 
-    Text flows down the left column and continues at the top of the right
-    one; splits fall between lines. Longer runs become several bands, each
-    at most :data:`COLUMN_BAND_MAX_PX` tall, read one after the other.
+    Text flows down each column and continues at the top of the next;
+    splits fall between lines. Longer runs become several bands, each at
+    most :data:`COLUMN_BAND_MAX_PX` tall, read one after the other.
     """
     gutter = theme.margin
-    column_w = (width - gutter) // 2
+    column_w = (width - gutter * (columns - 1)) // columns
     column = _Layout(column_w, theme=theme, pad=False)
     for element in elements:
         _layout_element(column, element)
@@ -822,7 +826,7 @@ def _column_bands(
     if not items:
         return []
     total = sum(height for height, _paint in items)
-    bands = max(1, math.ceil(total / (2 * COLUMN_BAND_MAX_PX)))
+    bands = max(1, math.ceil(total / (columns * COLUMN_BAND_MAX_PX)))
     groups: list[list[tuple[int, Paint]]] = [[] for _ in range(bands)]
     used = 0
     for item in items:  # fill bands in order, each to an equal share
@@ -833,35 +837,78 @@ def _column_bands(
     for number, group in enumerate(group for group in groups if group):
         if number:
             out.append(_band_break(width, theme))
-        out.append(_band(group, width, column_w))
+        out.append(_band(group, width, column_w, columns))
     return out
 
 
-def _band(items: list[tuple[int, Paint]], width: int, column_w: int) -> Image.Image:
+def _split_columns(heights: list[int], columns: int) -> list[int]:
+    """Cut points that split ``heights`` into ``columns`` runs in order.
+
+    Each column, left to right, ends where the taller of it and the best
+    split of what remains is shortest; ties go to the longer column, so
+    earlier columns keep the extra lines when the runs cannot be equal.
+    """
+    cuts, start = [], 0
+    for column in range(columns - 1):
+        rest = columns - 1 - column
+        best, best_cost, height = start, None, 0
+        for end in range(start, len(heights) + 1):
+            if end > start:
+                height += heights[end - 1]
+            cost = max(height, _tallest_column(heights[end:], rest))
+            if best_cost is None or cost <= best_cost:
+                best, best_cost = end, cost
+            if height >= best_cost:
+                break  # longer only gets taller
+        cuts.append(best)
+        start = best
+    return cuts
+
+
+def _tallest_column(heights: list[int], columns: int) -> int:
+    """The shortest possible tallest column when ``heights`` is split in
+    order into ``columns`` runs."""
+
+    def fits(cap: int) -> bool:
+        used, height = 1, 0
+        for value in heights:
+            if height + value > cap:
+                used, height = used + 1, 0
+            height += value
+        return used <= columns
+
+    low, high = max(heights, default=0), sum(heights)
+    while low < high:
+        mid = (low + high) // 2
+        if fits(mid):
+            high = mid
+        else:
+            low = mid + 1
+    return low
+
+
+def _band(
+    items: list[tuple[int, Paint]], width: int, column_w: int, columns: int
+) -> Image.Image:
     heights = [height for height, _paint in items]
-    total = sum(heights)
-    # The split that makes the taller column as short as possible; the left
-    # column keeps the extra line when they cannot be equal.
-    best, best_cost, left = len(items), total, 0
-    for split in range(len(items) + 1):
-        cost = max(left, total - left)
-        if cost < best_cost or cost == best_cost and left >= total - left:
-            best, best_cost = split, cost
-        if split < len(items):
-            left += heights[split]
-    band = Image.new("L", (width, max(1, best_cost)), 255)
-    for x0, group in ((0, items[:best]), (width - column_w, items[best:])):
+    bounds = [0, *_split_columns(heights, columns), len(items)]
+    groups = [items[a:b] for a, b in zip(bounds, bounds[1:], strict=False)]
+    tallest = max(sum(height for height, _paint in group) for group in groups)
+    band = Image.new("L", (width, max(1, tallest)), 255)
+    step = (width - column_w) / (columns - 1)
+    for number, group in enumerate(groups):
         column = Image.new("L", (column_w, band.height), 255)
         draw = ImageDraw.Draw(column)
         y = 0
         for height, paint in group:
             paint(draw, y)
             y += height
-        band.paste(column, (x0, 0))
-    mid = width // 2 - COLUMN_RULE_PX // 2
-    ImageDraw.Draw(band).rectangle(
-        [mid, 0, mid + COLUMN_RULE_PX - 1, band.height - 1], fill=0
-    )
+        band.paste(column, (round(number * step), 0))
+    if columns == 2:
+        mid = width // 2 - COLUMN_RULE_PX // 2
+        ImageDraw.Draw(band).rectangle(
+            [mid, 0, mid + COLUMN_RULE_PX - 1, band.height - 1], fill=0
+        )
     return band
 
 

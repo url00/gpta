@@ -206,6 +206,35 @@ class ImageTests(unittest.TestCase):
         self.assertGreater(len(runs), 1)
         self.assertLessEqual(max(runs), COLUMN_BAND_MAX_PX + 60)
 
+    def test_triple_columns(self):
+        from gpta.renderer import _split_columns
+
+        para = "Three narrow columns pack more text onto each page. " * 6
+        receipt = build_receipt("", [Text(para), Text(para), Text(para)], now=NOW)
+        triple = render_image(receipt, 576, layout="triple")
+        self.assertEqual(triple.width, 576)
+
+        def ink(image, box):
+            return sum(1 for v in image.convert("L").crop(box).getdata() if v == 0)
+
+        # Text in all three columns, roughly balanced, with clear gaps
+        # (no dividing rules) between them.
+        third = 576 // 3
+        body = (8, triple.height - 60)
+        inks = [
+            ink(triple, (i * third + 12, body[0], (i + 1) * third - 12, body[1]))
+            for i in range(3)
+        ]
+        self.assertGreater(min(inks), 0.6 * max(inks))
+        for x in (190, 383):
+            column = [triple.convert("L").getpixel((x, y)) for y in range(*body)]
+            self.assertNotIn(0, column)
+
+        # Balanced splits; earlier columns keep the extra line.
+        self.assertEqual(_split_columns([10] * 7, 3), [3, 5])
+        self.assertEqual(_split_columns([10] * 2, 3), [1, 2])
+        self.assertEqual(_split_columns([], 3), [0, 0])
+
     def test_checkbox_text(self):
         lines = render_text(
             Receipt("", (Checkbox("Soon", value="Oct 20", note="n"),), ""), 20
