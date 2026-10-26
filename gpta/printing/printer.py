@@ -21,6 +21,10 @@ from .transport import PrinterError, PrinterWriter
 
 log = logging.getLogger("gpta.printing")
 
+# Long prints get extra time on top of ``write_timeout_seconds``: one second
+# per this many dots of image height (8 dots per mm, so a slow 25 mm/s).
+TIMEOUT_DOTS_PER_SECOND = 200
+
 
 class PrinterDisabled(Exception):
     """Printing (or auto-printing) is switched off in the config."""
@@ -85,7 +89,12 @@ class Printer:
         if reason is not None:
             raise PrinterRateLimited(f"print rate limited: {reason}")
         try:
-            self._writer.print(image, cfg, timeout=float(cfg["write_timeout_seconds"]))
+            timeout = (
+                cfg["write_timeout_seconds"] + image.height / TIMEOUT_DOTS_PER_SECOND
+            )
+            # The CUPS transport reads its deadline from the config.
+            job_cfg = {**cfg, "write_timeout_seconds": timeout}
+            self._writer.print(image, job_cfg, timeout=timeout)
         except PrinterError as exc:
             self._record_failure(cfg, str(exc), source if auto else None)
             raise

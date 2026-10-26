@@ -680,23 +680,42 @@ function bindInstant() {
 }
 
 // ---- reader mode -----------------------------------------------------
-// Long pages come in parts of up to 8000 characters. "Start at character"
-// is 1-based for people; the API's offset is 0-based.
+// Whole pages print. Pages over READER_CONFIRM_CHARS ask first, since they
+// use a lot of paper.
+const READER_CONFIRM_CHARS = 40000;
 const readerUrl = document.getElementById("reader-url");
 const readerSize = document.getElementById("reader-size");
 const readerLayout = document.getElementById("reader-layout");
-const readerStart = document.getElementById("reader-start");
 const readerImg = document.getElementById("reader-img");
 const readerEmpty = document.getElementById("reader-empty");
 const readerMeta = document.getElementById("reader-meta");
 const readerNote = document.getElementById("reader-note");
 const readerPrint = document.getElementById("reader-print");
-const readerNext = document.getElementById("reader-next");
-let readerPage = null; // the fetched part the preview shows; printed as-is
+const readerConfirm = document.getElementById("reader-confirm");
+const readerConfirmText = document.getElementById("reader-confirm-text");
+let readerPage = null; // the fetched page the preview shows; printed as-is
 
-function readerStartOffset() {
-  const value = Math.floor(Number(readerStart.value));
-  return Number.isFinite(value) && value > 1 ? value - 1 : 0;
+function paperLength(mm) {
+  return mm >= 1000 ? `${(mm / 1000).toFixed(1)} m` : `${Math.max(1, Math.round(mm / 10))} cm`;
+}
+
+function readerSummary(page) {
+  const chars = page.chars < page.total
+    ? `the first ${page.chars.toLocaleString()} of ${page.total.toLocaleString()} characters`
+    : `${page.chars.toLocaleString()} characters`;
+  return `${chars} · about ${paperLength(page.paper_mm)} of paper`;
+}
+
+// Resolves true when the operator confirms a long print.
+function confirmLongPrint(page) {
+  readerConfirmText.textContent =
+    `This page is ${page.chars.toLocaleString()} characters long and will use ` +
+    `about ${paperLength(page.paper_mm)} of paper. Print all of it?`;
+  readerConfirm.returnValue = "";
+  readerConfirm.showModal();
+  return new Promise((resolve) => {
+    readerConfirm.addEventListener("close", () => resolve(readerConfirm.returnValue === "print"), { once: true });
+  });
 }
 
 function showReaderPage(page) {
@@ -705,13 +724,7 @@ function showReaderPage(page) {
   readerImg.hidden = false;
   readerEmpty.hidden = true;
   readerPrint.disabled = false;
-  readerNext.hidden = page.next_offset === null;
-  const fmt = (n) => n.toLocaleString();
-  const span = page.start === 0 && page.next_offset === null
-    ? `${fmt(page.total)} characters`
-    : `characters ${fmt(page.start + 1)}–${fmt(page.end)} of ${fmt(page.total)}`;
-  const length = (page.height_px / 80).toFixed(0); // 8 dots per mm
-  readerMeta.textContent = `${page.title || page.url} · ${span} · about ${length} cm of paper`;
+  readerMeta.textContent = `${page.title || page.url} · ${readerSummary(page)}`;
 }
 
 function bindReader() {
@@ -724,7 +737,7 @@ function bindReader() {
     try {
       showReaderPage(await api("/api/reader/fetch", {
         method: "POST",
-        body: { url, offset: readerStartOffset(), size: readerSize.value, layout: readerLayout.value },
+        body: { url, size: readerSize.value, layout: readerLayout.value },
       }));
     } catch (error) {
       readerMeta.textContent = "";
@@ -735,26 +748,26 @@ function bindReader() {
   readerUrl.addEventListener("keydown", (event) => {
     if (event.key === "Enter") fetchPage();
   });
-  // A new link starts from the beginning.
-  readerUrl.addEventListener("change", () => { readerStart.value = "1"; });
   // Re-fetch so the preview matches the new size (only after a fetch).
   for (const select of [readerSize, readerLayout]) {
     select.addEventListener("change", () => { if (readerPage) fetchPage(); });
   }
-  readerNext.addEventListener("click", () => {
-    if (!readerPage || readerPage.next_offset === null) return;
-    readerStart.value = String(readerPage.next_offset + 1);
-    fetchPage(readerNext);
-  });
   readerPrint.addEventListener("click", () => {
     busy(readerPrint, async () => {
       if (!readerPage) throw new Error("Fetch a page first.");
-      await api("/api/reader/print", {
-        method: "POST",
-        body: { blocks: readerPage.blocks, size: readerSize.value, layout: readerLayout.value },
-      });
-      const more = readerPage.next_offset === null ? "" : " Use Next part to continue.";
-      readerNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.${more}`;
+      const page = readerPage;
+      if (page.chars > READER_CONFIRM_CHARS && !(await confirmLongPrint(page))) return;
+      readerNote.textContent = `Printing ${readerSummary(page)}...`;
+      try {
+        await api("/api/reader/print", {
+          method: "POST",
+          body: { id: page.id, size: readerSize.value, layout: readerLayout.value },
+        });
+      } catch (error) {
+        readerNote.textContent = "";
+        throw error;
+      }
+      readerNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.`;
       await refresh();
     });
   });

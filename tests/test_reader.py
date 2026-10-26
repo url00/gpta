@@ -101,48 +101,16 @@ class UrlTests(unittest.TestCase):
                 handler.redirect_request(request, None, 302, "Found", {}, target)
 
 
-class WindowTests(unittest.TestCase):
-    BODY = (
-        Heading("Intro"),  # 0-5
-        Text("alpha beta gamma delta"),  # 5-27
-        Rule(),  # 27-28
-        Text("epsilon zeta"),  # 28-40
-    )
+class ArticleElementsTests(unittest.TestCase):
+    BODY = (Heading("Intro"), Text("alpha beta"), Rule(), Text("gamma"))
 
-    def test_whole_body_fits(self):
-        part = reader.window(self.BODY, 0, 100)
-        self.assertEqual(part.body, self.BODY)
-        self.assertEqual((part.start, part.end, part.total), (0, 40, 40))
-        self.assertTrue(part.complete)
-
-    def test_cut_on_word_boundaries(self):
-        part = reader.window(self.BODY, 0, 15)  # limit falls inside "gamma"
-        self.assertEqual(part.body, (Heading("Intro"), Text("alpha beta…")))
-        self.assertEqual(part.end, 16)  # just past the space after "beta"
-        self.assertFalse(part.complete)
-        rest = reader.window(self.BODY, part.end, 100)
-        self.assertEqual(rest.body[0], Text("…gamma delta"))
-        self.assertEqual(rest.body[1:], (Rule(), Text("epsilon zeta")))
-        self.assertEqual((rest.start, rest.end), (16, 40))
-        self.assertEqual(part.end, rest.start)
-
-    def test_start_inside_a_word_moves_to_the_next(self):
-        part = reader.window(self.BODY, 7, 100)  # inside "alpha"
-        self.assertEqual(part.body[0], Text("…beta gamma delta"))
-        self.assertEqual(part.start, 11)
-
-    def test_start_past_the_end(self):
-        part = reader.window(self.BODY, 500, 100)
-        self.assertEqual((part.body, part.start, part.end), ((), 40, 40))
-
-    def test_part_header_and_footer(self):
+    def test_header_then_body(self):
         article = reader.Article("T", "site", "", "https://x.example/", self.BODY)
-        blocks = article.elements(reader.window(self.BODY, 0, 15))
-        texts = [text_of(block) for block in blocks]
-        self.assertIn("characters 1–16 of 40", texts)
-        self.assertEqual(texts[-1], "Continues: next part starts at character 17")
-        full = article.elements(reader.window(self.BODY, 0, 100))
-        self.assertNotIn("Continues", " ".join(text_of(block) for block in full))
+        blocks = article.elements()
+        self.assertEqual(blocks[0], Heading("T"))
+        self.assertEqual(blocks[blocks.index(Rule(heavy=True)) + 1 :], list(self.BODY))
+        short = article.elements(self.BODY[:2])
+        self.assertEqual(short[-2:], list(self.BODY[:2]))
 
 
 class ExtractTests(unittest.TestCase):

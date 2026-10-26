@@ -198,6 +198,17 @@ main { padding: 1rem 1rem 2rem; }
 .reader-fetch input { flex: 1 1 auto; min-width: 0; }
 .reader-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: var(--gap); }
 .reader-options select, .reader-options input { width: 100%; }
+/* Confirmation before a long web page print. */
+.confirm {
+  max-width: min(28rem, calc(100vw - 2rem));
+  padding: 1rem;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+}
+.confirm::backdrop { background: rgb(0 0 0 / 0.5); }
+.confirm form { display: grid; gap: var(--gap); }
+.confirm p { margin: 0; }
 .instant-controls { display: flex; align-items: end; gap: var(--gap); flex-wrap: wrap; }
 .instant-controls #instant-count { margin-left: auto; }
 

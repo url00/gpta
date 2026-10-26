@@ -99,15 +99,22 @@ class PrinterSafetyTests(unittest.TestCase):
         self.assertEqual(self.service.printer.status()["last_job"]["module"], "instant")
 
     def test_reader_print(self):
+        from gpta.reader import Page
+
         self.enable_printer(auto_print=False)
-        blocks = [
-            {"kind": "heading", "text": "Title"},
-            {"kind": "text", "text": "Body"},
-        ]
+        words = " ".join(f"word{i:05d}" for i in range(3000))
+        html = f"<html><body><article><p>{words}</p></article></body></html>"
+        self.service.reader_fetcher = lambda url: Page("https://x.example/", html)
+        page = self.service.reader_fetch({"url": "https://x.example/"})
         with patch("gpta.printing.transport.send_to_device") as send:
-            self.service.reader_print({"blocks": blocks})
+            self.service.reader_print({"id": page["id"]})
         self.assertEqual(send.call_count, 1)
         self.assertEqual(self.service.printer.status()["last_job"]["module"], "reader")
+        # A long print gets more time than the configured write timeout.
+        image, config = send.call_args.args
+        self.assertEqual(image.height, page["height_px"])
+        base = self.service.config.snapshot()["printer"]["write_timeout_seconds"]
+        self.assertGreater(config["write_timeout_seconds"], base + 10)
 
     def scheduled_run(self):
         return self.service.runner.run("fake", trigger="schedule")

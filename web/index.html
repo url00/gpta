@@ -91,9 +91,6 @@
               <option value="triple">Three columns</option>
             </select>
           </label>
-          <label class="field" title="Long pages print in parts of up to 8000 characters">Start at character
-            <input id="reader-start" type="number" inputmode="numeric" min="1" step="1" value="1">
-          </label>
         </div>
         <p id="reader-meta" class="meta"></p>
         <div class="paper">
@@ -102,9 +99,18 @@
         </div>
         <div class="actions">
           <button id="reader-print" type="button" disabled>Print page</button>
-          <button id="reader-next" type="button" class="secondary" hidden>Next part</button>
         </div>
         <p id="reader-note" class="card-note"></p>
+        <dialog id="reader-confirm" class="confirm" aria-labelledby="reader-confirm-title">
+          <form method="dialog">
+            <h2 id="reader-confirm-title">Long print</h2>
+            <p id="reader-confirm-text"></p>
+            <div class="actions">
+              <button value="print" type="submit">Print anyway</button>
+              <button value="cancel" type="submit" class="secondary" autofocus>Cancel</button>
+            </div>
+          </form>
+        </dialog>
       </section>
     </section>
 

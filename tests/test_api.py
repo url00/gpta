@@ -372,41 +372,44 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(result["title"], "A walk")
         self.assertEqual(result["url"], "https://blog.example/walk")
         self.assertTrue(result["png"].startswith("data:image/png;base64,"))
-        self.assertEqual(result["blocks"][0], {"kind": "heading", "text": "A walk"})
-        self.assertEqual((result["start"], result["next_offset"]), (0, None))
-        self.assertEqual(result["end"], result["total"])
+        self.assertEqual(result["chars"], result["total"])
+        self.assertEqual(result["chars"], 56)
+        self.assertGreater(result["paper_mm"], 0)
+        self.assertEqual(result["paper_mm"], round(result["height_px"] / 8))
 
-        # A long article comes in parts; each fetch says where the next starts.
-        words = " ".join(f"word{i:05d}" for i in range(2000))  # 19999 chars
+        # A long article comes back whole.
+        words = " ".join(f"word{i:05d}" for i in range(5000))  # 49999 chars
         long_html = f"<html><body><article><p>{words}</p></article></body></html>"
         self.service.reader_fetcher = lambda url: Page(
             "https://blog.example/l", long_html
         )
-        texts, offset, parts = [], 0, 0
-        while offset is not None:
+        status, body, _ = self.request(
+            "POST", "/api/reader/fetch", {"url": "x", "size": "tiny"}
+        )
+        self.assertEqual(status, 200, body)
+        whole = json.loads(body)
+        self.assertEqual((whole["chars"], whole["total"]), (49999, 49999))
+        self.assertGreater(whole["paper_mm"], 1000)
+
+        # Runaway pages are cut, and the counts say so.
+        from gpta import service as service_module
+
+        old_max = service_module.READER_MAX_CHARS
+        service_module.READER_MAX_CHARS = 1000
+        try:
             status, body, _ = self.request(
-                "POST",
-                "/api/reader/fetch",
-                {"url": "x", "offset": offset, "size": "tiny"},
+                "POST", "/api/reader/fetch", {"url": "x", "size": "tiny"}
             )
-            self.assertEqual(status, 200, body)
-            part = json.loads(body)
-            self.assertEqual(part["start"], offset)
-            self.assertLessEqual(part["end"] - part["start"], 8000)
-            blocks = part["blocks"]
-            body = blocks[blocks.index({"kind": "rule", "heavy": True}) + 1]
-            texts.append(body["text"].strip("…"))
-            offset, parts = part["next_offset"], parts + 1
-        self.assertEqual(parts, 3)
-        self.assertEqual(" ".join(texts).split(), words.split())
-        for bad in (
-            {"url": "x", "offset": -1},
-            {"url": "x", "offset": "5"},
-            {"url": "x", "offset": 10**6},
-            {"url": "x", "size": "giant"},
-        ):
-            status, _, _ = self.request("POST", "/api/reader/fetch", bad)
-            self.assertEqual(status, 400, bad)
+        finally:
+            service_module.READER_MAX_CHARS = old_max
+        cut = json.loads(body)
+        self.assertEqual((cut["chars"], cut["total"]), (1000, 49999))
+        self.assertLess(cut["height_px"], whole["height_px"])
+
+        status, _, _ = self.request(
+            "POST", "/api/reader/fetch", {"url": "x", "size": "giant"}
+        )
+        self.assertEqual(status, 400)
         self.service.reader_fetcher = fetcher
 
         status, body, _ = self.request(
@@ -417,16 +420,15 @@ class ApiTests(unittest.TestCase):
         )
 
         # The printer is disabled in these tests.
-        status, _, _ = self.request(
-            "POST", "/api/reader/print", {"blocks": result["blocks"]}
-        )
+        status, _, _ = self.request("POST", "/api/reader/print", {"id": result["id"]})
         self.assertEqual(status, 409)
         for bad in (
             {},
-            {"blocks": []},
-            {"blocks": [{"kind": "nope"}]},
-            {"blocks": "x"},
-            {"blocks": result["blocks"], "size": "giant"},
+            {"id": ""},
+            {"id": 5},
+            {"id": "not-a-fetched-page"},
+            {"id": result["id"], "size": "giant"},
+            {"id": result["id"], "layout": "quad"},
         ):
             status, _, _ = self.request("POST", "/api/reader/print", bad)
             self.assertEqual(status, 400, bad)

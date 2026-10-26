@@ -10,13 +10,16 @@ locks only around their own state and never call out while holding them.
 from __future__ import annotations
 
 import base64
+import secrets
+import threading
 import time
+from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from . import __version__, reader
-from .blocks import Rule, Text, from_dict, to_dict
+from .blocks import Rule, Text, size_of
 from .config import PAPERS, ConfigStore
 from .errors import InvalidRequest, NotFound
 from .http import HttpClient
@@ -35,6 +38,7 @@ from .renderer import (
     render_text,
     test_receipt,
     to_png,
+    truncate,
 )
 from .runner import ModuleRunner, module_log
 from .scheduler import Scheduler
@@ -78,8 +82,13 @@ def instant_receipt(body: Any) -> Receipt:
 
 
 #: Longest article text the reader keeps; the rest is cut with a marker.
-READER_MAX_CHARS = 8000
-READER_MAX_BLOCKS = 600
+#: Whole pages print, so this only guards against runaway pages (about
+#: 15 m of paper at normal size).
+READER_MAX_CHARS = 150_000
+#: Fetched pages kept for printing, newest last.
+READER_CACHE_SIZE = 8
+#: Printer dots per mm (203 dpi), for paper length estimates.
+DOTS_PER_MM = 8
 
 
 def _png_url(image) -> str:
@@ -106,6 +115,10 @@ class Service:
         self.clock = clock
         # Replaced in tests so reader-mode fetches need no network.
         self.reader_fetcher = reader.fetch_page
+        # Fetched pages by id, so a print matches its preview exactly
+        # without sending the whole article back from the browser.
+        self._reader_pages: OrderedDict[str, list] = OrderedDict()
+        self._reader_lock = threading.Lock()
         self.monotonic = monotonic
         self.modules_dir = Path(modules_dir) if modules_dir else None
         self.registry_errors: dict[str, str] = dict(registry_errors or {})
@@ -194,71 +207,62 @@ class Service:
         return {"ok": True}
 
     def reader_fetch(self, body: Any) -> dict[str, Any]:
-        """Fetch a web page and return part of it as reader-mode blocks.
+        """Fetch a web page and lay out all of it, reader-mode style.
 
-        ``offset`` (0-based) picks where in the article text the part starts;
-        each part holds at most :data:`READER_MAX_CHARS` characters, and
-        ``next_offset`` says where the following part starts (None when this
-        part reaches the end). The blocks go back to the console, which sends
-        them to :meth:`reader_print`, so what prints is what was previewed.
+        Returns a preview with the character count and paper length, and an
+        ``id`` for :meth:`reader_print`, so what prints is what was previewed.
         """
         if not isinstance(body, dict):
             raise InvalidRequest("body must be an object")
         print_style(body)  # validate before fetching
-        offset = body.get("offset", 0)
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-            raise InvalidRequest("offset must be a whole number of 0 or more")
         try:
             page = self.reader_fetcher(body.get("url"))
             article = reader.extract(page.html, page.url)
         except reader.ReaderError as exc:
             raise InvalidRequest(str(exc)) from exc
-        part = reader.window(article.body, offset, READER_MAX_CHARS)
-        if not part.body:
-            raise InvalidRequest(
-                f"the article has only {part.total:,} characters; "
-                "nothing is left after that offset"
-            )
-        receipt = self._reader_receipt(article.elements(part))
-        module_log(f"reader fetched {page.url} from character {part.start}")
-        style = print_style(body, receipt.elements)
-        image = render_image(receipt, self._width_px(), **style)
+        total = sum(size_of(element) for element in article.body)
+        elements = article.elements(truncate(article.body, READER_MAX_CHARS))
+        receipt = self._reader_receipt(elements)
+        module_log(f"reader fetched {page.url}: {total} characters")
+        image = render_image(
+            receipt, self._width_px(), **print_style(body, receipt.elements)
+        )
+        page_id = secrets.token_hex(8)
+        with self._reader_lock:
+            self._reader_pages[page_id] = elements
+            while len(self._reader_pages) > READER_CACHE_SIZE:
+                self._reader_pages.popitem(last=False)
         return {
+            "id": page_id,
             "title": article.title,
             "url": page.url,
-            "blocks": [to_dict(element) for element in receipt.elements],
-            "start": part.start,
-            "end": part.end,
-            "total": part.total,
-            "next_offset": part.end if part.end < part.total else None,
+            "chars": min(total, READER_MAX_CHARS),
+            "total": total,
             "png": _png_url(image),
             "height_px": image.height,
+            "paper_mm": round(image.height / DOTS_PER_MM),
         }
 
     def reader_print(self, body: Any) -> dict[str, Any]:
-        raw = body.get("blocks") if isinstance(body, dict) else None
-        if not isinstance(raw, list) or not raw:
+        """Print a page from :meth:`reader_fetch` by its ``id``."""
+        page_id = body.get("id") if isinstance(body, dict) else None
+        if not isinstance(page_id, str) or not page_id:
             raise InvalidRequest("nothing to print; fetch a page first")
-        if len(raw) > READER_MAX_BLOCKS:
-            raise InvalidRequest(f"at most {READER_MAX_BLOCKS} blocks can be printed")
-        print_style(body)  # validate before parsing blocks
-        try:
-            elements = [from_dict(item) for item in raw]
-        except ValueError as exc:
-            raise InvalidRequest(f"invalid block: {exc}") from exc
-        # A fetched part holds READER_MAX_CHARS of article text; the slack
-        # covers its header and footer. Anything longer did not come from a
-        # fetch and is cut.
-        receipt = self._reader_receipt(elements, READER_MAX_CHARS + 2000)
+        print_style(body)  # validate before looking the page up
+        with self._reader_lock:
+            elements = self._reader_pages.get(page_id)
+        if elements is None:
+            raise InvalidRequest("that page is no longer loaded; fetch it again")
+        receipt = self._reader_receipt(elements)
         style = print_style(body, receipt.elements)
         image = render_image(receipt, self._width_px(), **style)
         self.printer.submit(image, "reader", manual=True)
-        module_log(f"reader print: {len(elements)} blocks")
+        module_log(f"reader print: {image.height // DOTS_PER_MM} mm")
         return {"ok": True}
 
-    def _reader_receipt(self, elements: list, max_chars: int | None = None) -> Receipt:
+    def _reader_receipt(self, elements: list) -> Receipt:
         now = datetime.fromtimestamp(self.clock(), UTC)
-        return build_receipt("", elements, max_chars, now)
+        return build_receipt("", elements, now=now)
 
     def _width_px(self) -> int:
         return _paper(self.config.snapshot())["width_px"]
