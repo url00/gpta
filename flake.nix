@@ -9,8 +9,9 @@
       version = (builtins.fromTOML (builtins.readFile ./pyproject.toml)).project.version;
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
-      # Pillow is the one runtime dependency (receipts are rendered images).
-      pythonFor = pkgs: pkgs.python3.withPackages (ps: [ ps.pillow ]);
+      # Runtime dependencies: Pillow (receipts are rendered images) and
+      # segno (QR codes); see docs/decisions.md.
+      pythonFor = pkgs: pkgs.python3.withPackages (ps: [ ps.pillow ps.segno ]);
     in {
       packages = forAllSystems (pkgs: {
         # The interpreter alone: scripts/ run the checkout with it.

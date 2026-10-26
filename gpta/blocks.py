@@ -2,7 +2,7 @@
 
 Every kind is a small frozen dataclass that converts to and from plain JSON
 (:func:`to_dict` / :func:`from_dict`), so receipts can be saved in
-``state.json`` and, later, sent over IPC. New kinds (QR codes, images) are
+``state.json`` and, later, sent over IPC. New kinds (images, say) are
 added by defining a dataclass with a ``kind`` and registering it in
 :data:`KINDS`; the renderer then needs a layout function for it.
 """
@@ -169,11 +169,32 @@ class BarChart:
             _number(self.max_value, "BarChart.max_value")
 
 
+#: Longest text a :class:`QrCode` may hold; long URLs still scan at this size.
+QR_MAX_CHARS = 1000
+
+
+@dataclass(frozen=True)
+class QrCode:
+    """A centred QR code for ``data``, usually a URL."""
+
+    kind: ClassVar[str] = "qr"
+
+    data: str
+
+    def __post_init__(self) -> None:
+        _str(self.data, "QrCode.data")
+        if not self.data:
+            raise ValueError("QrCode.data must not be empty")
+        if len(self.data) > QR_MAX_CHARS:
+            raise ValueError(f"QrCode.data must be at most {QR_MAX_CHARS} characters")
+
+
 #: Everything a module may return from ``fetch()``.
-Element = Block | Heading | Text | Rule | KeyValue | Checkbox | BarChart
+Element = Block | Heading | Text | Rule | KeyValue | Checkbox | BarChart | QrCode
 
 KINDS: dict[str, type] = {
-    cls.kind: cls for cls in (Block, Heading, Text, Rule, KeyValue, Checkbox, BarChart)
+    cls.kind: cls
+    for cls in (Block, Heading, Text, Rule, KeyValue, Checkbox, BarChart, QrCode)
 }
 
 

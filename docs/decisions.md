@@ -111,3 +111,17 @@ by the renderer and the raster encoder.
 
 **Revisit when** the target hardware needs a dependency-free build (Pillow
 not available), or a printer cannot handle `GS v 0` raster data.
+
+## 9. QR codes and the segno dependency
+
+**Decision (2026-10-26):** QR codes (the `QrCode` block, first used for the
+source link in a printed web page's header) are encoded with
+[segno](https://github.com/heuer/segno), GPTA's second runtime dependency.
+
+Rationale: Pillow draws but does not encode QR codes, and an encoder of our
+own (Reed–Solomon, masking, version tables) is a lot of code to get exactly
+right. segno is pure Python with no dependencies of its own and is packaged
+by Nix. Only the renderer uses it; it supplies the module matrix and GPTA
+draws the dots, so the preview stays pixel for pixel what prints.
+
+**Revisit when** a dependency-free build is needed (see decision 8).

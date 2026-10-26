@@ -10,7 +10,7 @@ name = "gpta"
 version = "0.1.0"
 description = "Modular receipt data server and thermal printer simulator"
 requires-python = ">=3.11"
-dependencies = ["pillow>=10"]  # the only one; see docs/decisions.md
+dependencies = ["pillow>=10", "segno>=1.5"]  # see docs/decisions.md
 
 [tool.ruff]
 line-length = 88

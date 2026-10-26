@@ -26,6 +26,7 @@ from .blocks import (
     Element,
     Heading,
     KeyValue,
+    QrCode,
     Rule,
     Text,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "Heading",
     "KeyValue",
     "Module",
+    "QrCode",
     "ModuleContext",
     "Rule",
     "Text",

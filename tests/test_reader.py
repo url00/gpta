@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
 
 from gpta import reader
-from gpta.blocks import Heading, Rule, Text, text_of
+from gpta.blocks import Heading, QrCode, Rule, Text, text_of
 
 ARTICLE = """<!doctype html>
 <html class="client-nojs vector-feature-main-menu-disabled"><head>
@@ -108,6 +108,8 @@ class ArticleElementsTests(unittest.TestCase):
         article = reader.Article("T", "site", "", "https://x.example/", self.BODY)
         blocks = article.elements()
         self.assertEqual(blocks[0], Heading("T"))
+        rule = blocks.index(Rule(heavy=True))
+        self.assertEqual(blocks[rule - 1], QrCode("https://x.example/"))
         self.assertEqual(blocks[blocks.index(Rule(heavy=True)) + 1 :], list(self.BODY))
         short = article.elements(self.BODY[:2])
         self.assertEqual(short[-2:], list(self.BODY[:2]))
@@ -157,11 +159,12 @@ class ExtractTests(unittest.TestCase):
         self.assertNotIn(Heading("How receipts work"), body)
 
     def test_elements_header(self):
-        head = self.article.elements()[:4]
+        head = self.article.elements()[:5]
         self.assertEqual(head[0], Heading("How receipts work"))
         self.assertEqual(head[1], Text("Ada Lovelace · The Paper Blog", size="small"))
         self.assertEqual(head[2], Text("https://paper.example/receipts", size="small"))
-        self.assertEqual(head[3], Rule(heavy=True))
+        self.assertEqual(head[3], QrCode("https://paper.example/receipts"))
+        self.assertEqual(head[4], Rule(heavy=True))
 
     def test_sections_are_merged_without_article_tag(self):
         para = "<p>" + "Words, more words, and still more words. " * 4 + "</p>"

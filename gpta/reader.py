@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
 from . import __version__
-from .blocks import Element, Heading, Rule, Text
+from .blocks import QR_MAX_CHARS, Element, Heading, QrCode, Rule, Text
 
 MAX_PAGE_BYTES = 3_000_000
 MAX_REDIRECTS = 5
@@ -467,6 +467,8 @@ class Article:
         if credit:
             head.append(Text(credit, size="small"))
         head.append(Text(self.url, size="small"))
+        if len(self.url) <= QR_MAX_CHARS:
+            head.append(QrCode(self.url))  # scan to open the original page
         return [*head, Rule(heavy=True), *(self.body if body is None else body)]
 
 

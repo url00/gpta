@@ -9,6 +9,7 @@ from gpta.blocks import (
     Checkbox,
     Heading,
     KeyValue,
+    QrCode,
     Rule,
     Text,
     from_dict,
@@ -43,6 +44,7 @@ ALL_KINDS = [
     Rule(heavy=True),
     KeyValue("Score", "300"),
     BarChart((Bar("alpha", 3), Bar("beta", 10, "ten"), ("gamma", 0)), title="Bars"),
+    QrCode("https://example.com/story"),
 ]
 
 
@@ -78,6 +80,8 @@ class BlockTests(unittest.TestCase):
             {"kind": "text", "text": "x", "size": "giant"},
             {"kind": "bar_chart", "bars": [{"label": "a", "value": "x"}]},
             {"kind": "key_value", "label": 1, "value": "x"},
+            {"kind": "qr", "data": ""},
+            {"kind": "qr", "data": "x" * 1001},
             "text",
         ):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
@@ -234,6 +238,27 @@ class ImageTests(unittest.TestCase):
         self.assertEqual(_split_columns([10] * 7, 3), [3, 5])
         self.assertEqual(_split_columns([10] * 2, 3), [1, 2])
         self.assertEqual(_split_columns([], 3), [0, 0])
+
+    def test_qr_code_dots_match_matrix(self):
+        import segno
+
+        url = "https://blog.example/a-long-article?ref=receipt"
+        image = render_image(Receipt("", (QrCode(url),), ""), 576).convert("L")
+        rows = segno.make(url, error="m", micro=False).matrix
+        # Find the drawn code: the first and last black columns and rows.
+        box = image.point(lambda v: 255 - v).getbbox()
+        module = (box[2] - box[0]) // len(rows)
+        self.assertGreaterEqual(module, 2)
+        self.assertEqual(box[2] - box[0], module * len(rows))
+        self.assertLess(abs((box[0] + box[2]) / 2 - 288), module)  # centred
+        for r, row in enumerate(rows):
+            for c, dark in enumerate(row):
+                x = box[0] + c * module + module // 2
+                y = box[1] + r * module + module // 2
+                self.assertEqual(image.getpixel((x, y)) == 0, bool(dark), (r, c))
+        self.assertIn(
+            f"[QR: {url}]", "\n".join(render_text(Receipt("", (QrCode(url),), ""), 80))
+        )
 
     def test_checkbox_text(self):
         lines = render_text(

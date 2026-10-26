@@ -96,6 +96,7 @@ wrapped to the paper width; don't pre-wrap or pad it.
 | `Checkbox(text, checked=False, value="", note="")` | `str`, `bool`, `str`, `str` | A drawn box (filled when checked), `text` with a hanging indent, bold `value` right-aligned on the first line (e.g. a due date), and `note` in small text underneath |
 | `BarChart(bars, title="", max_value=None)` | `tuple[Bar, ...]`, `str`, number | One row per bar: label, black bar, value. Bars scale to `max_value` (default: the largest value) |
 | `Bar(label, value, display="")` | `str`, number, `str` | `display` replaces the printed number, e.g. `"1.2k"` |
+| `QrCode(data)` | `str`, up to 1000 characters | A centred QR code, about 25 mm wide (larger for long data), e.g. a link to the full story |
 
 `BarChart` also accepts `(label, value)` tuples in place of `Bar`s. Blocks are
 frozen dataclasses with plain fields, so the host can save them as JSON and

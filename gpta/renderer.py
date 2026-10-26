@@ -21,6 +21,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import segno
 from PIL import Image, ImageDraw, ImageFont
 
 from .blocks import (
@@ -31,6 +32,7 @@ from .blocks import (
     Element,
     Heading,
     KeyValue,
+    QrCode,
     Rule,
     Text,
     from_dict,
@@ -304,6 +306,11 @@ def _element_text(element: Any, width: int) -> list[str]:
         return [_align(line, width, element.align) for line in wrapped] + [""]
     if isinstance(element, Rule):
         return [("=" if element.heavy else "-") * width]
+    if isinstance(element, QrCode):
+        return [
+            _align(line, width, "center")
+            for line in wrap_text(f"[QR: {element.data}]", width)
+        ] + [""]
     if isinstance(element, KeyValue):
         label, value = clean_text(element.label), clean_text(element.value)
         if len(label) + len(value) + 1 <= width:
@@ -588,11 +595,46 @@ def _layout_element(out: _Layout, element: Any) -> None:
         _layout_checkbox(out, element)
     elif isinstance(element, BarChart):
         _layout_bar_chart(out, element)
+    elif isinstance(element, QrCode):
+        _layout_qr(out, element)
     elif isinstance(element, Ruler):
         _layout_ruler(out)
     else:
         raise TypeError(f"cannot render {type(element).__name__}")
     out.add(out.gap)
+
+
+# A QR code aims for about this wide (25 mm at 203 dpi) with modules of
+# 2-6 dots, and never wider than the space it is in.
+QR_TARGET_PX = 200
+QR_QUIET_MODULES = 2
+
+
+def _layout_qr(out: _Layout, element: QrCode) -> None:
+    rows = segno.make(element.data, error="m", micro=False).matrix
+    count = len(rows) + 2 * QR_QUIET_MODULES
+    module = max(2, min(6, round(QR_TARGET_PX / count)))
+    module = max(1, min(module, out.inner // count))
+    left = out.left + (out.inner - count * module) // 2
+    quiet = QR_QUIET_MODULES * module
+
+    def paint(draw, y):
+        for r, row in enumerate(rows):
+            top = y + quiet + r * module
+            c = 0
+            while c < len(row):  # one rectangle per run of dark modules
+                if not row[c]:
+                    c += 1
+                    continue
+                start = c
+                while c < len(row) and row[c]:
+                    c += 1
+                x0 = left + quiet + start * module
+                draw.rectangle(
+                    [x0, top, x0 + (c - start) * module - 1, top + module - 1], fill=0
+                )
+
+    out.add(count * module, paint)
 
 
 def _layout_key_value(out: _Layout, element: KeyValue) -> None:
@@ -754,7 +796,7 @@ def render_image(
 
 
 def _full_width(element: Any) -> bool:
-    if isinstance(element, (Heading, Rule, Ruler)):
+    if isinstance(element, (Heading, Rule, Ruler, QrCode)):
         return True
     return isinstance(element, Text) and element.align != "left"
 
