@@ -28,6 +28,7 @@ from .logbus import LogBus
 from .module_api import Module
 from .outputs import OutputStore
 from .printing import Printer, PrinterWriter
+from .printing.jobs import MOVES
 from .registry import describe
 from .renderer import (
     Receipt,
@@ -99,6 +100,12 @@ READER_CACHE_SIZE = 8
 DOTS_PER_MM = 8
 
 
+def _confirmed(body: Any) -> bool:
+    """Whether the request says the operator already agreed to the length,
+    so the job is not held again at the warning limit."""
+    return isinstance(body, dict) and body.get("confirmed") is True
+
+
 def _png_url(image) -> str:
     return "data:image/png;base64," + base64.b64encode(to_png(image)).decode("ascii")
 
@@ -138,7 +145,7 @@ class Service:
         self.outputs = OutputStore()
         self.db = Database(config.data_dir / "gpta.db")
         self.printer = Printer(
-            config, writer=printer_writer, clock=clock, monotonic=monotonic
+            config, self.db, writer=printer_writer, clock=clock, monotonic=monotonic
         )
         self.runner = ModuleRunner(
             config,
@@ -155,6 +162,7 @@ class Service:
         self.scheduler = Scheduler(
             config, self.runner, clock=clock, monotonic=monotonic
         )
+        self.printer.on_result = self.runner.note_print
         self._descriptions = {
             module_id: describe(module) for module_id, module in registry.items()
         }
@@ -162,6 +170,7 @@ class Service:
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
+        self.printer.start()  # jobs left waiting by the last run
         self.scheduler.start()
 
     def stop(self) -> None:
@@ -193,16 +202,21 @@ class Service:
         self.config.update_printer(patch)
         if isinstance(patch, dict) and patch.get("enabled") is True:
             self.printer.reset_failures()
+        self.printer.wake()  # the change may release, or hold, the queue
         module_log("printer configuration updated")
         return self._printer_snapshot()
 
     def test_printer(self) -> dict[str, Any]:
         paper = PAPERS[self.config.snapshot()["printer"]["paper"]]
         receipt = test_receipt(datetime.fromtimestamp(self.clock(), UTC))
-        self.printer.submit(
+        job = self.printer.submit(
             render_image(receipt, paper["width_px"]), "test", manual=True
         )
-        return {"ok": True, "lines": render_text(receipt, paper["columns"])}
+        return {
+            "ok": True,
+            "job": job,
+            "lines": render_text(receipt, paper["columns"]),
+        }
 
     def instant_preview(self, body: Any) -> dict[str, Any]:
         """The image an instant print would produce, as a PNG data URL."""
@@ -216,9 +230,11 @@ class Service:
 
     def instant_print(self, body: Any) -> dict[str, Any]:
         image = render_image(instant_receipt(body), self._width_px())
-        self.printer.submit(image, "instant", manual=True)
-        module_log(f"instant print: {len(body['text'])} characters")
-        return {"ok": True}
+        job = self.printer.submit(
+            image, "instant", manual=True, approved=_confirmed(body)
+        )
+        module_log(f"instant print queued: {len(body['text'])} characters")
+        return {"ok": True, "job": job}
 
     def reader_fetch(self, body: Any) -> dict[str, Any]:
         """Fetch a web page and lay out all of it, reader-mode style.
@@ -266,9 +282,52 @@ class Service:
         if elements is None:
             raise InvalidRequest("that page is no longer loaded; fetch it again")
         image = render_image(self._reader_receipt(elements, body), self._width_px())
-        self.printer.submit(image, "reader", manual=True)
-        module_log(f"reader print: {image.height // DOTS_PER_MM} mm")
-        return {"ok": True}
+        job = self.printer.submit(
+            image, "reader", manual=True, approved=_confirmed(body)
+        )
+        module_log(f"reader print queued: {image.height // DOTS_PER_MM} mm")
+        return {"ok": True, "job": job}
+
+    # -- print queue ---------------------------------------------------
+    def queue(self) -> dict[str, Any]:
+        return self.printer.queue()
+
+    def queue_png(self, job_id: str) -> bytes:
+        data = self.printer.job_png(int(job_id))
+        if data is None:
+            raise NotFound(f"no image for print job {job_id}")
+        return data
+
+    def queue_pause(self, paused: bool) -> dict[str, Any]:
+        if paused:
+            self.printer.pause()
+        else:
+            self.printer.resume()
+        return self.printer.queue()
+
+    def queue_clear(self) -> dict[str, Any]:
+        count = self.printer.clear()
+        module_log(f"print queue cleared: {count} job(s) cancelled")
+        return self.printer.queue()
+
+    def queue_action(self, job_id: str, action: str, body: Any) -> dict[str, Any]:
+        """Approve, cancel, retry or move one job."""
+        number = int(job_id)
+        if action == "approve":
+            done = self.printer.approve(number)
+        elif action == "cancel":
+            done = self.printer.cancel(number)
+        elif action == "retry":
+            done = self.printer.retry(number)
+        else:
+            to = body.get("to") if isinstance(body, dict) else None
+            if to not in MOVES:
+                raise InvalidRequest(f"to must be one of {', '.join(MOVES)}")
+            done = self.printer.move(number, to)
+        if not done:
+            raise NotFound(f"print job {job_id} cannot be changed that way now")
+        module_log(f"print job {job_id}: {action}")
+        return self.printer.queue()
 
     def _reader_receipt(self, elements: list, body: dict) -> Receipt:
         """A web page's receipt; its header (up to the heavy rule) stays
@@ -357,6 +416,7 @@ class Service:
             "interval_seconds": cfg["interval_seconds"],
             "limits": dict(cfg["limits"]),
             "options": dict(cfg["options"]),
+            "style": dict(cfg["style"]),
             "runtime": runtime,
             "output": {
                 "lines": lines,

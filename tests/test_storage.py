@@ -202,6 +202,29 @@ class ModuleRunTests(unittest.TestCase):
         self.assertTrue(self.service.output_png("counter").startswith(b"\x89PNG"))
 
 
+class StyleTests(unittest.TestCase):
+    def test_precedence(self):
+        from gpta.runner import _styled
+
+        printer = {"module_layout": "triple", "module_size": "large"}
+        default = {"layout": "default", "size": "default"}
+        blocks = [Text("x")]
+
+        def pick(content, style=default):
+            doc = _styled(content, style, printer)
+            return doc.layout, doc.size
+
+        self.assertEqual(pick(blocks), ("triple", "large"))
+        self.assertEqual(pick(Document(blocks)), ("triple", "large"))
+        self.assertEqual(pick(Document(blocks, layout="double")), ("double", "large"))
+        chosen = {"layout": "single", "size": "tiny"}
+        self.assertEqual(
+            pick(Document(blocks, layout="double", size="small"), chosen),
+            ("single", "tiny"),
+        )
+        self.assertEqual(_styled("nonsense", default, printer), "nonsense")
+
+
 class DocumentTests(unittest.TestCase):
     def test_invalid_documents_raise(self):
         for kwargs in ({"layout": "quad"}, {"size": "giant"}, {"lead": -1}):

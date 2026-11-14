@@ -65,15 +65,16 @@ class LoggingTests(unittest.TestCase):
         self.assertEqual(levels.get("careful"), "warning")
 
     def test_skipped_print_is_visible(self):
-        self.store.update_printer(
-            {"enabled": True, "auto_print": True, "min_print_spacing_seconds": 600}
-        )
-        with patch("gpta.printing.transport.send_to_device"):
-            self.service.runner.run("emit", trigger="schedule")
+        self.store.update_printer({"enabled": True, "auto_print": True})
+        with (
+            patch("gpta.printing.transport.send_to_device"),
+            patch("gpta.printing.jobs.MAX_PENDING", 0),
+        ):
             self.service.runner.run("emit", trigger="schedule")
         skipped = [e for e in self.entries() if "print skipped" in e["message"]]
         self.assertEqual(len(skipped), 1)
-        self.assertEqual(skipped[0]["level"], "info")
+        self.assertEqual(skipped[0]["level"], "warning")
+        self.assertIn("queue is full", skipped[0]["message"])
 
     def test_text_sinks_prefix_module(self):
         formatter = ModuleFormatter("%(message)s")

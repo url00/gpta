@@ -12,11 +12,17 @@
       <h1>GPTA</h1>
       <span id="server-status" class="status">connecting...</span>
     </div>
+    <!-- Shown on every tab: the panic switch and what the queue is doing. -->
+    <div class="queue-bar">
+      <a id="queue-chip" class="status" href="#queue" data-goto="queue">queue idle</a>
+      <button id="queue-pause" type="button" class="secondary">Pause printing</button>
+    </div>
     <!-- To add a tab: add a button here and a matching section below.
          data-tab is the URL hash; ids follow tab-<name> / panel-<name>. -->
     <nav class="tabs" role="tablist" aria-label="Console sections">
       <button type="button" role="tab" id="tab-instant" data-tab="instant" aria-controls="panel-instant">Instant</button>
       <button type="button" role="tab" id="tab-modules" data-tab="modules" aria-controls="panel-modules">Modules</button>
+      <button type="button" role="tab" id="tab-queue" data-tab="queue" aria-controls="panel-queue">Queue</button>
       <button type="button" role="tab" id="tab-printer" data-tab="printer" aria-controls="panel-printer">Printer</button>
       <button type="button" role="tab" id="tab-about" data-tab="about" aria-controls="panel-about">About</button>
     </nav>
@@ -146,6 +152,25 @@
       </aside>
     </section>
 
+    <section id="panel-queue" class="panel queue-panel" role="tabpanel" aria-labelledby="tab-queue" tabindex="0" hidden>
+      <h2>Print queue</h2>
+      <p class="desc">Every print waits here and prints in order. A job over the length limit holds the jobs behind it until you approve or cancel it.</p>
+      <p id="queue-blocked" class="queue-held" role="status"></p>
+      <p id="queue-state" class="printer-state"></p>
+
+      <h3>Printing now</h3>
+      <ul id="queue-current" class="jobs"></ul>
+
+      <div class="logs-head">
+        <h3>Waiting</h3>
+        <button id="queue-clear" type="button" class="secondary">Cancel all</button>
+      </div>
+      <ul id="queue-pending" class="jobs"></ul>
+
+      <h3>Recent</h3>
+      <ul id="queue-history" class="jobs"></ul>
+    </section>
+
     <section id="panel-printer" class="panel printer-panel" role="tabpanel" aria-labelledby="tab-printer" tabindex="0" hidden>
       <h2>Printer</h2>
       <div class="printer-form">
@@ -162,6 +187,33 @@
         </label>
         <label class="field" title="Raw CUPS queue; when set, used instead of the device">CUPS queue
           <input id="printer-queue" type="text" spellcheck="false" autocomplete="off" placeholder="(use device)">
+        </label>
+        <label class="field" title="A longer job holds the queue until you approve it">Approve prints over (m)
+          <input id="printer-warn" type="number" min="0.1" max="100" step="0.1">
+        </label>
+        <label class="field" title="A job still waiting after this long is dropped">Drop waiting jobs after (hours)
+          <input id="printer-expiry" type="number" min="1" max="168" step="1">
+        </label>
+      </div>
+      <h3>Module output defaults</h3>
+      <p class="desc">How module receipts are set, unless a module or its own settings say otherwise. Applies from each module's next run.</p>
+      <div class="printer-form">
+        <label class="field">Size
+          <select id="printer-module-size">
+              <option value="tiny">Tiny (12px)</option>
+              <option value="small">Small (16px)</option>
+              <option value="compact">Compact (20px)</option>
+              <option value="body">Normal (24px)</option>
+              <option value="large">Large (30px)</option>
+              <option value="huge">Huge (36px)</option>
+          </select>
+        </label>
+        <label class="field">Layout
+          <select id="printer-module-layout">
+            <option value="single">One column</option>
+            <option value="double">Two columns</option>
+            <option value="triple">Three columns</option>
+          </select>
         </label>
       </div>
       <div class="actions">
@@ -183,7 +235,7 @@
       <h2 id="confirm-print-title">Long print</h2>
       <p id="confirm-print-text"></p>
       <div class="actions">
-        <button value="print" type="submit">Print anyway</button>
+        <button value="print" type="submit">Print it</button>
         <button value="cancel" type="submit" class="secondary" autofocus>Cancel</button>
       </div>
     </form>

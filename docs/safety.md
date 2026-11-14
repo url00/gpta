@@ -14,8 +14,12 @@ records what happens when things go wrong.
 | Printer offline | Open/write error, or write deadline | Run still succeeds; `print_error` recorded; consecutive failures counted | Fix device; failures reset on success |
 | Printer busy | Single writer thread | Writes are serialized, never interleaved | Automatic |
 | Printer jammed | `write_timeout_seconds` deadline | Caller gets `PrinterError`; device thread may remain blocked; jobs that time out while still queued are cancelled and never print | Restart if the kernel never returns |
-| Print loop / runaway | Min spacing + hourly cap | Extra prints are skipped (auto) or rejected `429` (manual test) | Adjust `printer.*` config |
-| Repeated print failures | `failure_threshold` consecutive failures | Printer auto-disabled, error logged, `disabled_reason` exposed | Re-enable in the UI/API |
+| Print loop / runaway | One queue: min spacing for automatic prints, hourly cap, 50 waiting jobs at most, a module's newer scheduled receipt replaces its waiting one | Jobs wait for a slot; over 50 waiting, new prints are refused (`429`, or "not printed" on the module) | Pause, cancel jobs, or adjust `printer.*` |
+| Very long print | `printer.warn_length_mm` (default 2.5 m) | The job waits at the head of the queue, holding the jobs behind it, until approved or cancelled. A print already confirmed in the console is not held again | Approve or cancel on the Queue tab |
+| Panic | Pause printing (every tab) / `POST /api/queue/pause` | No further job starts, even after a restart. The job on the printer can be stopped: between raster bands on a device, by cancelling the job on CUPS; paper already printed stays | Resume when ready |
+| Forgotten jobs | `printer.job_expiry_hours` (default 24) | A job still waiting after that long is dropped and logged | Automatic |
+| Restart while printing | Jobs are stored in `data/gpta.db` | Waiting jobs print after the restart; the job that was printing is marked failed, not printed twice | Retry it on the Queue tab if needed |
+| Repeated print failures | `failure_threshold` consecutive failures | Printer auto-disabled, error logged, `disabled_reason` exposed; waiting jobs stay queued | Re-enable in the UI/API; retry failed jobs |
 | Repeated module failures | Non-zero `consecutive_failures` | Effective interval doubles, capped at 7 days | One success resets it |
 | Wall-clock jump | Scheduling uses `time.monotonic()` | No burst or stall; wall clock is only used to carry last-run times across restarts | Automatic |
 | Server restart | `data/gpta.db` (last run, result, failure count, latest receipt per module; each module's `ctx.store`) | Only modules that are due run; backoff continues; a saved run time in the future counts as "just ran" | Automatic |

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .blocks import LAYOUTS, PRINT_SIZES
 from .module_api import CORE_LIMITS_SCHEMA, Module, limits_schema
 
 DEFAULT_SERVER = {
@@ -36,6 +37,15 @@ DEFAULT_PRINTER = {
     "min_print_spacing_seconds": 30,
     "max_prints_per_hour": 60,
     "failure_threshold": 3,
+    # A job longer than this waits at the head of the queue, holding the
+    # jobs behind it, until the operator approves or cancels it.
+    "warn_length_mm": 2500,
+    # A job still waiting after this long is dropped.
+    "job_expiry_hours": 24,
+    # How module receipts are set unless the module or its settings say
+    # otherwise: one of blocks.PRINT_SIZES and blocks.LAYOUTS.
+    "module_size": "body",
+    "module_layout": "single",
 }
 
 #: Paper sizes: printable width in dots (203 dpi), and columns for the
@@ -47,7 +57,14 @@ PAPERS = {
 
 CUPS_QUEUE_RE = re.compile(r"[A-Za-z0-9_.@-]{0,127}")
 
-MODULE_KEYS = {"enabled", "interval_seconds", "limits", "options"}
+MODULE_KEYS = {"enabled", "interval_seconds", "limits", "options", "style"}
+#: A module's "style" setting: "default" leaves the choice to the module,
+#: then to printer.module_size / printer.module_layout.
+STYLE_DEFAULT = "default"
+STYLE_CHOICES = {
+    "size": (STYLE_DEFAULT, *PRINT_SIZES),
+    "layout": (STYLE_DEFAULT, *LAYOUTS),
+}
 PRINTER_KEYS = set(DEFAULT_PRINTER)
 SERVER_KEYS = set(DEFAULT_SERVER)
 
@@ -220,7 +237,26 @@ def _normalise_module(
             f"{where}.options",
             reject,
         ),
+        "style": _normalise_style(raw.get("style", {}), f"{where}.style", reject),
     }
+
+
+def _normalise_style(raw: Any, where: str, reject: Reject) -> dict[str, str]:
+    """A module's size and layout overrides; each defaults to "default"."""
+    if not isinstance(raw, dict):
+        reject(f"{where} must be an object")
+        raw = {}
+    unknown = set(raw) - set(STYLE_CHOICES)
+    if unknown:
+        reject(f"{where} has unknown keys: {', '.join(sorted(unknown))}")
+    result = {}
+    for key, choices in STYLE_CHOICES.items():
+        value = raw.get(key, STYLE_DEFAULT)
+        if value not in choices:
+            reject(f"{where}.{key} must be one of {', '.join(choices)}")
+            value = STYLE_DEFAULT
+        result[key] = value
+    return result
 
 
 def _tolerant_section(
@@ -330,6 +366,22 @@ def _normalise_printer(raw: Any) -> dict[str, Any]:
         or not 1 <= result["failure_threshold"] <= 100
     ):
         raise ConfigError("printer.failure_threshold must be between 1 and 100")
+    if (
+        type(result["warn_length_mm"]) is not int
+        or not 100 <= result["warn_length_mm"] <= 100_000
+    ):
+        raise ConfigError("printer.warn_length_mm must be between 100 and 100000")
+    if (
+        type(result["job_expiry_hours"]) is not int
+        or not 1 <= result["job_expiry_hours"] <= 168
+    ):
+        raise ConfigError("printer.job_expiry_hours must be between 1 and 168")
+    if result["module_size"] not in PRINT_SIZES:
+        raise ConfigError(
+            f"printer.module_size must be one of {', '.join(PRINT_SIZES)}"
+        )
+    if result["module_layout"] not in LAYOUTS:
+        raise ConfigError(f"printer.module_layout must be one of {', '.join(LAYOUTS)}")
     return result
 
 
@@ -459,6 +511,10 @@ class ConfigStore:
                 if not isinstance(patch["options"], dict):
                     raise ConfigError("options patch must be an object")
                 candidate["options"].update(patch["options"])
+            if "style" in patch:
+                if not isinstance(patch["style"], dict):
+                    raise ConfigError("style patch must be an object")
+                candidate["style"].update(patch["style"])
             defaults = _module_defaults(module)
             normalised = _normalise_module(
                 module, candidate, defaults, f"modules.{module_id}"

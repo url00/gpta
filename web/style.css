@@ -418,3 +418,51 @@ pre { margin: 0.35rem 0 0; font: inherit; }
   .card-head { flex-direction: column; gap: 0.5rem; }
   .actions .links { margin-left: 0; }
 }
+
+/* ---- print queue ----------------------------------------------------- */
+
+.queue-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0;
+  border-bottom: var(--rule-dashed);
+}
+.queue-bar .status { text-decoration: none; }
+.queue-bar .status.error { text-decoration: none; }
+.queue-bar button { padding: 0.25rem 0.6rem; }
+.queue-bar button.paused { background: var(--ink); color: var(--paper); }
+
+.queue-panel { max-width: 72ch; }
+.queue-panel > h2 { margin-bottom: 0.4rem; }
+.queue-panel > h3 { margin: 1.2rem 0 0.4rem; }
+.queue-panel .desc { margin-bottom: 0.8rem; }
+.jobs { list-style: none; margin: 0; padding: 0; border: 1px solid var(--ink); }
+.jobs li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.4rem 0.5rem;
+  border-bottom: var(--rule-dotted);
+}
+.jobs li:last-child { border-bottom: none; }
+.jobs li.empty { font-size: var(--fs-small); text-transform: uppercase; letter-spacing: 0.08em; }
+.jobs li.held { border-left: 6px solid var(--ink); }
+.jobs .job-what { flex: 1 1 14rem; min-width: 0; }
+.jobs .job-what b { overflow-wrap: anywhere; }
+.jobs .job-meta { display: block; font-size: var(--fs-small); overflow-wrap: anywhere; }
+.jobs .job-actions { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.jobs .job-actions button { padding: 0.15rem 0.45rem; font-size: var(--fs-small); }
+.printer-panel > h3 { margin: 1.2rem 0 0.2rem; }
+.queue-held {
+  margin: 0.6rem 0 0;
+  padding: 0.35rem 0.5rem;
+  font-size: var(--fs-small);
+  background: var(--ink);
+  color: var(--paper);
+  overflow-wrap: anywhere;
+}
+.queue-held:empty { display: none; }

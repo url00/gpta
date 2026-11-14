@@ -1,9 +1,10 @@
 """Durable storage: one SQLite file, ``data/gpta.db``. Standard library only.
 
-Two things live in it:
+Three things live in it:
 
-- the host's per-module run state (:class:`gpta.state.StateStore`), and
-- each module's own key/value store (:class:`ModuleStore`, ``ctx.store``).
+- the host's per-module run state (:class:`gpta.state.StateStore`),
+- each module's own key/value store (:class:`ModuleStore`, ``ctx.store``), and
+- the print queue and its history (:mod:`gpta.printing.jobs`).
 
 Settings stay in ``config.json`` (people edit it by hand) and downloads stay
 in the file cache (large, and safe to evict); see docs/decisions.md.
@@ -45,6 +46,28 @@ MIGRATIONS: tuple[str, ...] = (
         value      TEXT NOT NULL,
         updated_at REAL NOT NULL,
         PRIMARY KEY (module_id, key)
+    ) WITHOUT ROWID;
+    """,
+    """
+    CREATE TABLE print_jobs (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        source      TEXT NOT NULL,
+        kind        TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        position    REAL NOT NULL,
+        approved    INTEGER NOT NULL DEFAULT 0,
+        width_px    INTEGER NOT NULL,
+        height_px   INTEGER NOT NULL,
+        image       BLOB,
+        error       TEXT,
+        created_at  REAL NOT NULL,
+        started_at  REAL,
+        finished_at REAL
+    );
+    CREATE INDEX print_jobs_state ON print_jobs (state, position);
+    CREATE TABLE host_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
     ) WITHOUT ROWID;
     """,
 )

@@ -245,15 +245,17 @@ class Document:
     """Blocks plus how to set them on the paper.
 
     ``fetch()`` may return one instead of a plain list. ``layout`` is one of
-    :data:`LAYOUTS` and ``size`` one of :data:`PRINT_SIZES`. In a column
-    layout the first ``lead`` blocks stay full width, as do headings, rules,
-    QR codes and centred text; by default (``None``) the lead is everything
-    up to the first heavy rule.
+    :data:`LAYOUTS` and ``size`` one of :data:`PRINT_SIZES`; leave either as
+    ``None`` to use the operator's default for module output. The operator
+    can also override both per module. In a column layout the first ``lead``
+    blocks stay full width, as do headings, rules, QR codes and centred
+    text; by default (``None``) the lead is everything up to the first heavy
+    rule.
     """
 
     elements: tuple[Element, ...]
-    layout: str = "single"
-    size: str = "body"
+    layout: str | None = None
+    size: str | None = None
     lead: int | None = None
 
     def __post_init__(self) -> None:
@@ -262,8 +264,10 @@ class Document:
         ):
             raise TypeError("Document.elements must be a list of blocks")
         object.__setattr__(self, "elements", tuple(self.elements))
-        _choice(self.layout, "Document.layout", LAYOUTS)
-        _choice(self.size, "Document.size", tuple(PRINT_SIZES))
+        if self.layout is not None:
+            _choice(self.layout, "Document.layout", LAYOUTS)
+        if self.size is not None:
+            _choice(self.size, "Document.size", tuple(PRINT_SIZES))
         if self.lead is not None and (type(self.lead) is not int or self.lead < 0):
             raise ValueError("Document.lead must be a whole number, 0 or more")
 

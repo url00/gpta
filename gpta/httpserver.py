@@ -67,6 +67,14 @@ ROUTES: list[tuple[str, re.Pattern[str], str]] = [
         ("POST", r"/api/instant/print", "instant_print"),
         ("POST", r"/api/reader/fetch", "reader_fetch"),
         ("POST", r"/api/reader/print", "reader_print"),
+        ("GET", r"/api/queue", "queue"),
+        ("GET", r"/api/queue/(?P<job_id>\d{1,12})\.png", "queue_png"),
+        ("POST", r"/api/queue/(?P<action>pause|resume|clear)", "queue_control"),
+        (
+            "POST",
+            r"/api/queue/(?P<job_id>\d{1,12})/(?P<action>approve|cancel|retry|move)",
+            "queue_action",
+        ),
     )
 ]
 
@@ -198,6 +206,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def _h_reader_print(self) -> None:
         self._json(200, self.server.service.reader_print(self._body_json))
+
+    def _h_queue(self) -> None:
+        self._json(200, self.server.service.queue())
+
+    def _h_queue_png(self, job_id: str) -> None:
+        data = self.server.service.queue_png(job_id)
+        self._send_headers(200, "image/png", len(data))
+        self.wfile.write(data)
+
+    def _h_queue_control(self, action: str) -> None:
+        service = self.server.service
+        if action == "clear":
+            self._json(200, service.queue_clear())
+        else:
+            self._json(200, service.queue_pause(action == "pause"))
+
+    def _h_queue_action(self, job_id: str, action: str) -> None:
+        self._json(
+            200, self.server.service.queue_action(job_id, action, self._body_json)
+        )
 
     # -- dispatch ------------------------------------------------------
     def _dispatch(self) -> None:

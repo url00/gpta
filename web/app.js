@@ -19,6 +19,7 @@ const LOG_SHOWN = 300;
 const SERVER_LOGS = "__server__";
 
 let state = null;
+let queue = null;        // the print queue, from /api/queue
 let selected = "total";
 let refreshing = false;
 let bannerTimer = null;
@@ -138,6 +139,14 @@ function bindTabs() {
 
 // ---- module cards ----------------------------------------------------
 
+const SIZE_CHOICES = [
+  ["tiny", "Tiny (12px)"], ["small", "Small (16px)"], ["compact", "Compact (20px)"],
+  ["body", "Normal (24px)"], ["large", "Large (30px)"], ["huge", "Huge (36px)"],
+];
+const LAYOUT_CHOICES = [
+  ["single", "One column"], ["double", "Two columns"], ["triple", "Three columns"],
+];
+
 function schemaInput(schema, value, key, kind) {
   let input;
   if (schema.type === "bool") {
@@ -225,6 +234,19 @@ function buildCard(module) {
     fieldEntries.push({ input, schema, kind: "option", key });
   }
 
+  const styleInputs = {};
+  for (const [key, label, choices] of [
+    ["size", "Print size", SIZE_CHOICES],
+    ["layout", "Layout", LAYOUT_CHOICES],
+  ]) {
+    const select = document.createElement("select");
+    select.append(new Option("Use default", "default"));
+    for (const [value, text] of choices) select.append(new Option(text, value));
+    select.value = (module.style && module.style[key]) || "default";
+    fields.append(field(label, select));
+    styleInputs[key] = select;
+  }
+
   const actions = make("div", "actions");
   const save = make("button", "", "Save");
   save.type = "button";
@@ -250,7 +272,7 @@ function buildCard(module) {
 
   const entry = {
     root, title, desc, enabled, badge, meta, interval,
-    fieldEntries, save, run, error, note, output, module, busy: false,
+    fieldEntries, styleInputs, save, run, error, note, output, module, busy: false,
   };
   cards.set(module.id, entry);
 
@@ -279,6 +301,7 @@ function buildCard(module) {
       });
       if (!result.ok) showBanner(`${module.name}: ${result.error}`);
       else if (result.print_skipped) showBanner(`${module.name}: not printed (${result.print_skipped})`);
+      else if (result.job && result.job.needs_approval) showBanner(`${module.name}: ${heldNotice(result.job)}`);
       await refresh();
     });
   });
@@ -306,6 +329,10 @@ function collectPatch(entry) {
     interval_seconds: Number(entry.interval.value),
     limits: {},
     options: {},
+    style: {
+      size: entry.styleInputs.size.value,
+      layout: entry.styleInputs.layout.value,
+    },
   };
   for (const item of entry.fieldEntries) {
     const value = readValue(item.input, item.schema);
@@ -343,7 +370,12 @@ function updateCard(entry, module) {
     const value = item.kind === "limit" ? module.limits[item.key] : module.options[item.key];
     setValueIfIdle(item.input, value);
   }
-  entry.error.textContent = runtime.print_error || runtime.last_error || "";
+  for (const [key, select] of Object.entries(entry.styleInputs)) {
+    setValueIfIdle(select, (module.style && module.style[key]) || "default");
+  }
+  entry.error.textContent = runtime.print_error
+    ? `print failed: ${runtime.print_error}`
+    : runtime.last_error || "";
   entry.note.textContent = runtime.print_skipped ? `Not printed: ${runtime.print_skipped}` : "";
   entry.output.textContent = module.output.text || "No output yet.";
 }
@@ -396,6 +428,10 @@ function updatePrinter() {
   setValueIfIdle(document.getElementById("printer-paper"), printer.paper || DEFAULT_PAPER);
   setValueIfIdle(document.getElementById("printer-device"), printer.device);
   setValueIfIdle(document.getElementById("printer-queue"), printer.cups_queue);
+  setValueIfIdle(document.getElementById("printer-warn"), printer.warn_length_mm / 1000);
+  setValueIfIdle(document.getElementById("printer-expiry"), printer.job_expiry_hours);
+  setValueIfIdle(document.getElementById("printer-module-size"), printer.module_size);
+  setValueIfIdle(document.getElementById("printer-module-layout"), printer.module_layout);
   const target = printer.cups_queue ? `CUPS queue ${printer.cups_queue}` : printer.device;
   const bits = [printer.enabled ? `printing to ${target}` : "simulator only"];
   if (printer.paper) bits.push(printer.width_px ? `${printer.paper} paper, ${printer.width_px}px` : `${printer.paper} paper`);
@@ -545,6 +581,7 @@ function updateAll() {
     }
   }
   updateSimulator();
+  updateQueue();
   updateInstant();
   updateLogFilter();
   renderLogs();
@@ -555,6 +592,7 @@ async function refresh() {
   refreshing = true;
   try {
     state = await api("/api/state");
+    queue = await api("/api/queue");
     await refreshLogs();
     updateAll();
   } catch (error) {
@@ -579,6 +617,10 @@ function bindPrinterControls() {
           paper: document.getElementById("printer-paper").value,
           device: document.getElementById("printer-device").value,
           cups_queue: document.getElementById("printer-queue").value.trim(),
+          warn_length_mm: Math.round(Number(document.getElementById("printer-warn").value) * 1000),
+          job_expiry_hours: Number(document.getElementById("printer-expiry").value),
+          module_size: document.getElementById("printer-module-size").value,
+          module_layout: document.getElementById("printer-module-layout").value,
         },
       });
       await refresh();
@@ -586,7 +628,8 @@ function bindPrinterControls() {
   });
   test.addEventListener("click", () => {
     busy(test, async () => {
-      await api("/api/printer/test", { method: "POST", body: {} });
+      const result = await api("/api/printer/test", { method: "POST", body: {} });
+      showBanner(queuedNotice(result.job));
       await refresh();
     });
   });
@@ -594,9 +637,9 @@ function bindPrinterControls() {
 
 // ---- instant print ---------------------------------------------------
 // ---- long prints -----------------------------------------------------
-// Instant text and web pages print whole. Over CONFIRM_CHARS characters,
-// a dialog asks first, since they use a lot of paper.
-const CONFIRM_CHARS = 40000;
+// Instant text and web pages print whole. A print longer than the
+// printer's warning limit asks first; a confirmed print is sent with
+// confirmed: true so the queue does not hold it for approval again.
 const confirmDialog = document.getElementById("confirm-print");
 const confirmText = document.getElementById("confirm-print-text");
 
@@ -604,18 +647,39 @@ function paperLength(mm) {
   return mm >= 1000 ? `${(mm / 1000).toFixed(1)} m` : `${Math.max(1, Math.round(mm / 10))} cm`;
 }
 
-// Resolves true to print: at once for short prints, else when confirmed.
-// ``what`` names the print, e.g. "This page"; ``print`` has chars, paper_mm.
+function warnLimit() {
+  return state && state.printer.warn_length_mm ? state.printer.warn_length_mm : 2500;
+}
+
+// Resolves "ok" for a short print, "confirmed" when the operator agreed to
+// a long one, or null when they cancelled. ``what`` names the print, e.g.
+// "This page"; ``print`` has chars and paper_mm.
 function confirmLongPrint(what, print) {
-  if (print.chars <= CONFIRM_CHARS) return Promise.resolve(true);
+  if (print.paper_mm <= warnLimit()) return Promise.resolve("ok");
   confirmText.textContent =
     `${what} is ${print.chars.toLocaleString()} characters long and will use ` +
-    `about ${paperLength(print.paper_mm)} of paper. Print all of it?`;
+    `about ${paperLength(print.paper_mm)} of paper, over the ` +
+    `${paperLength(warnLimit())} limit. Print all of it?`;
   confirmDialog.returnValue = "";
   confirmDialog.showModal();
   return new Promise((resolve) => {
-    confirmDialog.addEventListener("close", () => resolve(confirmDialog.returnValue === "print"), { once: true });
+    confirmDialog.addEventListener(
+      "close",
+      () => resolve(confirmDialog.returnValue === "print" ? "confirmed" : null),
+      { once: true },
+    );
   });
+}
+
+function heldNotice(job) {
+  return `job ${job.id} is ${paperLength(job.length_mm)} long and waits for approval on the Queue tab`;
+}
+
+function queuedNotice(job) {
+  if (job.needs_approval) return `Queued, but ${heldNotice(job)}.`;
+  const ahead = queue ? queue.pending.filter((item) => item.id !== job.id).length : 0;
+  const wait = queue && queue.blocked ? ` (${queue.blocked})` : "";
+  return `Queued as job ${job.id}${ahead ? `, ${ahead} ahead of it` : ""}${wait}.`;
 }
 
 const INSTANT_DRAFT_KEY = "gpta.instant";
@@ -722,13 +786,13 @@ function bindInstant() {
   print.addEventListener("click", () => {
     busy(print, async () => {
       if (!instantText.value.trim()) throw new Error("Nothing to print yet.");
-      if (instantText.value.length > CONFIRM_CHARS) {
-        const preview = await currentInstantPreview();
-        if (!(await confirmLongPrint("This text", preview))) return;
-      }
-      await api("/api/instant/print", { method: "POST", body: instantBody() });
-      instantNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.`;
+      const answer = await confirmLongPrint("This text", await currentInstantPreview());
+      if (!answer) return;
+      const result = await api("/api/instant/print", {
+        method: "POST", body: { ...instantBody(), confirmed: answer === "confirmed" },
+      });
       await refresh();
+      instantNote.textContent = queuedNotice(result.job);
     });
   });
   document.getElementById("instant-clear").addEventListener("click", () => {
@@ -796,20 +860,148 @@ function bindReader() {
     busy(readerPrint, async () => {
       if (!readerPage) throw new Error("Fetch a page first.");
       const page = readerPage;
-      if (!(await confirmLongPrint("This page", page))) return;
-      readerNote.textContent = `Printing ${readerSummary(page)}...`;
-      try {
-        await api("/api/reader/print", {
-          method: "POST",
-          body: { id: page.id, size: readerSize.value, layout: readerLayout.value },
-        });
-      } catch (error) {
-        readerNote.textContent = "";
-        throw error;
-      }
-      readerNote.textContent = `Printed at ${new Date().toLocaleTimeString()}.`;
+      const answer = await confirmLongPrint("This page", page);
+      if (!answer) return;
+      const result = await api("/api/reader/print", {
+        method: "POST",
+        body: {
+          id: page.id, size: readerSize.value, layout: readerLayout.value,
+          confirmed: answer === "confirmed",
+        },
+      });
       await refresh();
+      readerNote.textContent = queuedNotice(result.job);
     });
+  });
+}
+
+// ---- print queue -----------------------------------------------------
+
+const queueChip = document.getElementById("queue-chip");
+const queuePause = document.getElementById("queue-pause");
+const SOURCE_NAMES = { instant: "Instant print", reader: "Web page", test: "Test page" };
+let queueView = "";      // what the queue lists currently show
+
+function sourceName(source) {
+  if (SOURCE_NAMES[source]) return SOURCE_NAMES[source];
+  const module = state && state.modules.find((item) => item.id === source);
+  return module ? module.name : source;
+}
+
+function shortTime(iso) {
+  return iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+}
+
+async function queuePost(path, body = {}) {
+  queue = await api(`/api/queue/${path}`, { method: "POST", body });
+  await refresh();
+}
+
+function jobButton(label, title, action) {
+  const button = make("button", "secondary", label);
+  button.type = "button";
+  button.title = title;
+  button.addEventListener("click", () => busy(button, action));
+  return button;
+}
+
+function jobRow(job, where, index, count) {
+  const row = make("li", job.needs_approval ? "held" : "");
+  const what = make("span", "job-what");
+  what.append(make("b", "", `#${job.id} ${sourceName(job.source)}`));
+  const bits = [paperLength(job.length_mm), job.kind === "auto" ? "automatic" : "manual"];
+  if (where === "pending") bits.push(`queued ${shortTime(job.created_at)}`);
+  if (where === "current") bits.push(`started ${shortTime(job.started_at)}`);
+  if (where === "history") bits.push(`${job.state} ${shortTime(job.finished_at)}`);
+  if (job.needs_approval) bits.push(`over the ${paperLength(queue.warn_length_mm)} limit: needs approval`);
+  if (job.error && job.error !== "cancelled") bits.push(job.error);
+  what.append(make("span", "job-meta", bits.join(" · ")));
+  const actions = make("span", "job-actions");
+  const id = job.id;
+  if (where === "pending") {
+    if (job.needs_approval) {
+      actions.append(jobButton("Approve", "Print this job despite its length", () => queuePost(`${id}/approve`)));
+    }
+    if (index > 0) {
+      actions.append(
+        jobButton("Top", "Print this job next", () => queuePost(`${id}/move`, { to: "top" })),
+        jobButton("Up", "Move up", () => queuePost(`${id}/move`, { to: "up" })),
+      );
+    }
+    if (index < count - 1) {
+      actions.append(jobButton("Down", "Move down", () => queuePost(`${id}/move`, { to: "down" })));
+    }
+    actions.append(jobButton("Cancel", "Remove this job", () => queuePost(`${id}/cancel`)));
+  } else if (where === "current") {
+    actions.append(jobButton("Stop", "Stop this print as soon as the printer allows", () => queuePost(`${id}/cancel`)));
+  } else if (job.can_retry) {
+    actions.append(jobButton("Retry", "Queue this job again", () => queuePost(`${id}/retry`)));
+  }
+  if (where !== "history" || job.can_retry) {
+    const link = make("a", "", "Image");
+    link.href = `/api/queue/${id}.png`;
+    link.target = "_blank";
+    link.rel = "noopener";
+    actions.append(link);
+  }
+  row.append(what, actions);
+  return row;
+}
+
+function fillJobs(listId, jobs, where, emptyText) {
+  const list = document.getElementById(listId);
+  list.replaceChildren();
+  if (!jobs.length) list.append(make("li", "empty", emptyText));
+  jobs.forEach((job, index) => list.append(jobRow(job, where, index, jobs.length)));
+}
+
+function updateQueue() {
+  if (!queue) return;
+  const pending = queue.pending.length;
+  const bits = [];
+  if (queue.paused) bits.push("PRINTING PAUSED");
+  else if (queue.current) bits.push("printing");
+  else if (queue.blocked) bits.push("queue held");
+  else bits.push("queue idle");
+  if (pending) bits.push(`${pending} waiting`);
+  queueChip.textContent = bits.join(" · ");
+  queueChip.title = queue.blocked || "";
+  queueChip.classList.toggle("error", Boolean(queue.paused || queue.blocked));
+  queuePause.textContent = queue.paused ? "Resume printing" : "Pause printing";
+  queuePause.classList.toggle("paused", queue.paused);
+  document.getElementById("tab-queue").textContent = pending ? `Queue (${pending})` : "Queue";
+
+  document.getElementById("queue-blocked").textContent = queue.blocked
+    ? `Queue held: ${queue.blocked}` : "";
+  const used = queue.history
+    .filter((job) => job.state === "done")
+    .reduce((sum, job) => sum + job.length_mm, 0);
+  const summary = [
+    state.printer.enabled ? "printer on" : "printer off: prints are refused, not queued",
+    `approval needed over ${paperLength(queue.warn_length_mm)}`,
+  ];
+  if (used) summary.push(`${paperLength(used)} printed in the recent jobs below`);
+  document.getElementById("queue-state").textContent = summary.join(" · ");
+  document.getElementById("queue-clear").disabled = !pending;
+
+  // Rebuild the lists only when something changed, so buttons keep focus.
+  const view = JSON.stringify([queue.current, queue.pending, queue.history, queue.warn_length_mm]);
+  if (view === queueView) return;
+  queueView = view;
+  fillJobs("queue-current", queue.current ? [queue.current] : [], "current", "Nothing is printing.");
+  fillJobs("queue-pending", queue.pending, "pending", "No jobs waiting.");
+  fillJobs("queue-history", queue.history, "history", "Nothing printed yet.");
+}
+
+function bindQueue() {
+  queuePause.addEventListener("click", () => {
+    busy(queuePause, () => queuePost(queue && queue.paused ? "resume" : "pause"));
+  });
+  const clear = document.getElementById("queue-clear");
+  clear.addEventListener("click", () => {
+    if (!queue || !queue.pending.length) return;
+    if (!window.confirm(`Cancel all ${queue.pending.length} waiting job(s)?`)) return;
+    busy(clear, () => queuePost("clear"));
   });
 }
 
@@ -830,6 +1022,7 @@ async function init() {
   bindInstant();
   bindReader();
   bindPrinterControls();
+  bindQueue();
   bindSimulator();
   bindLogs();
   await refresh();

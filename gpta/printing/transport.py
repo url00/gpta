@@ -24,11 +24,21 @@ from typing import Any
 
 from PIL import Image
 
-from .escpos import to_escpos
+from .escpos import escpos_parts, to_escpos
 
 
 class PrinterError(Exception):
     pass
+
+
+class PrintStopped(PrinterError):
+    """The operator stopped the job while it was printing."""
+
+
+def _stop_requested(config: dict[str, Any]) -> bool:
+    """Whether the job's ``stop`` event (set by the print queue) is set."""
+    stop = config.get("stop")
+    return stop is not None and stop.is_set()
 
 
 CUPS_COMMAND_TIMEOUT = 10
@@ -105,6 +115,13 @@ def _send_to_cups(image: Image.Image, config: dict[str, Any]) -> None:
         pending = _run(["lpstat", "-o", queue_name]).split()
         if job_id not in pending:
             break
+        if _stop_requested(config):
+            # CUPS may already have sent some of it; the rest is dropped.
+            try:
+                _run(["cancel", job_id])
+            except PrinterError:
+                pass
+            raise PrintStopped(f"CUPS job {job_id} cancelled")
         if time.monotonic() >= deadline:
             # Never let a job the caller was told failed print later.
             try:
@@ -127,7 +144,11 @@ def _send_to_device_node(image: Image.Image, config: dict[str, Any]) -> None:
     resolved = os.path.realpath(device)
     if not resolved.startswith("/dev/"):
         raise PrinterError(f"refusing to follow {device} outside /dev")
-    data = _escpos_bytes(image, config)
+    init, bands, tail = escpos_parts(
+        image,
+        feed_lines=int(config.get("feed_lines", 0)),
+        cut=bool(config.get("cut", True)),
+    )
     try:
         fd = os.open(resolved, os.O_WRONLY | getattr(os, "O_NOCTTY", 0))
     except OSError as exc:
@@ -143,7 +164,15 @@ def _send_to_device_node(image: Image.Image, config: dict[str, Any]) -> None:
         fd = -1
         with handle:
             try:
-                handle.write(data)
+                # One write per band, so a stop takes effect between bands
+                # and the paper is still fed and cut.
+                handle.write(init)
+                for band in bands:
+                    if _stop_requested(config):
+                        handle.write(tail)
+                        raise PrintStopped("stopped while printing")
+                    handle.write(band)
+                handle.write(tail)
                 handle.flush()
             except OSError as exc:
                 raise PrinterError(f"failed to write to {device}: {exc}") from exc

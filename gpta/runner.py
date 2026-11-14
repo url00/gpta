@@ -21,7 +21,6 @@ from .printing import (
     AutoPrintOff,
     Printer,
     PrinterDisabled,
-    PrinterError,
     PrinterRateLimited,
 )
 from .renderer import Receipt, build_receipt, render_image
@@ -64,8 +63,9 @@ class ModuleRuntime:
     last_duration_ms: int | None = None
     run_count: int = 0
     running: bool = False
+    # Why the module's last print job failed on the device, if it did.
     print_error: str | None = None
-    # Why the last successful run was not printed, when the printer is on.
+    # Why the last successful run was not queued, when the printer is on.
     print_skipped: str | None = None
     consecutive_failures: int = 0
 
@@ -77,6 +77,28 @@ class RunTicket:
     module: Module
     cfg: dict[str, Any]
     width_px: int
+    printer: dict[str, Any]
+
+
+def _styled(content: Any, style: dict[str, str], printer: dict[str, Any]) -> Any:
+    """``content`` with its layout and size settled: the module's setting
+    wins, then what the module asked for, then the printer's default.
+    Anything that is not blocks is passed on for ``build_receipt`` to
+    reject."""
+    document = content if isinstance(content, Document) else None
+    if document is None and not isinstance(content, (list, tuple)):
+        return content
+    elements = document.elements if document else content
+
+    def pick(name: str) -> str:
+        if style[name] != "default":
+            return style[name]
+        asked = getattr(document, name) if document else None
+        return asked or printer[f"module_{name}"]
+
+    return Document(
+        elements, pick("layout"), pick("size"), document.lead if document else None
+    )
 
 
 def effective_interval(cfg: dict[str, Any], runtime: ModuleRuntime) -> int:
@@ -140,7 +162,7 @@ class ModuleRunner:
             # than wedging the API in a permanent 409.
             return {
                 "ok": False,
-                "printed": False,
+                "queued": False,
                 "error": str(exc),
                 "runtime": self.runtime_snapshot(module_id),
             }
@@ -167,6 +189,7 @@ class ModuleRunner:
             self.registry[module_id],
             settings["modules"][module_id],
             PAPERS[settings["printer"]["paper"]]["width_px"],
+            settings["printer"],
         )
 
     def execute(self, ticket: RunTicket, trigger: str) -> dict[str, Any]:
@@ -175,7 +198,7 @@ class ModuleRunner:
         module_id = module.id
         started = self.monotonic()
         error: str | None = None
-        printed = False
+        job: dict[str, Any] | None = None
         module_log(f"run started ({trigger})", "info", module_id)
         store = ModuleStore(self.db, module_id)
 
@@ -197,7 +220,7 @@ class ModuleRunner:
                 content = [Block("No content", ("No items available.",))]
             receipt = build_receipt(
                 module.name,
-                content,
+                _styled(content, cfg["style"], ticket.printer),
                 max_chars=int(cfg["limits"]["max_chars"]),
                 now=now,
             )
@@ -216,7 +239,7 @@ class ModuleRunner:
                 runtime.print_skipped = None
                 runtime.consecutive_failures = 0
             module_log(f"fetched {len(receipt.elements)} block(s)", "info", module_id)
-            printed = self._auto_print(module_id, image, manual=trigger == "manual")
+            job = self._auto_print(module_id, image, manual=trigger == "manual")
         except Exception as exc:
             error = str(exc)
             module_log(f"run failed: {error}", "error", module_id)
@@ -241,7 +264,11 @@ class ModuleRunner:
                 )
 
         self._persist(module_id)
-        result: dict[str, Any] = {"ok": error is None, "printed": printed}
+        result: dict[str, Any] = {
+            "ok": error is None,
+            "queued": job is not None,
+            "job": job,
+        }
         with self._lock:
             result["print_skipped"] = self._runtime[module_id].print_skipped
         if error is not None:
@@ -249,24 +276,30 @@ class ModuleRunner:
         result["runtime"] = self.runtime_snapshot(module_id)
         return result
 
-    def _auto_print(self, module_id: str, image: Image.Image, *, manual: bool) -> bool:
-        """Print a run's receipt if printing is on; record why not otherwise."""
+    def _auto_print(
+        self, module_id: str, image: Image.Image, *, manual: bool
+    ) -> dict[str, Any] | None:
+        """Queue a run's receipt for printing if printing is on; record why
+        not otherwise. Returns the print job, or None."""
         try:
-            self.printer.submit(image, module_id, auto=True, manual=manual)
+            job = self.printer.submit(image, module_id, auto=True, manual=manual)
         except AutoPrintOff as exc:
             self._set_print_state(module_id, skipped=str(exc))
-            return False
+            return None
         except PrinterDisabled:
-            return False  # simulator-only mode; nothing to report
+            return None  # simulator-only mode; nothing to report
         except PrinterRateLimited as exc:
-            module_log(f"print skipped: {exc}", "info", module_id)
+            module_log(f"print skipped: {exc}", "warning", module_id)
             self._set_print_state(module_id, skipped=str(exc))
-            return False
-        except PrinterError as exc:
-            self._set_print_state(module_id, error=str(exc))
-            return False
+            return None
         self._set_print_state(module_id)
-        return True
+        return job
+
+    def note_print(self, job: dict[str, Any], error: str | None) -> None:
+        """Record how a module's print job ended (the printer calls this)."""
+        if job["source"] in self._runtime:
+            with self._lock:
+                self._runtime[job["source"]].print_error = error
 
     def _set_print_state(
         self, module_id: str, *, error: str | None = None, skipped: str | None = None

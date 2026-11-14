@@ -2,7 +2,13 @@ import unittest
 
 from PIL import Image
 
-from gpta.printing.escpos import ESC_FEED_AND_CUT, ESC_INIT, raster_rows, to_escpos
+from gpta.printing.escpos import (
+    ESC_FEED_AND_CUT,
+    ESC_INIT,
+    escpos_parts,
+    raster_rows,
+    to_escpos,
+)
 
 
 def image(width, height, black=()):
@@ -27,6 +33,16 @@ def bands(data):
 
 
 class RasterTests(unittest.TestCase):
+    def test_parts_join_to_the_whole_job(self):
+        img = image(16, 600, [(3, 5), (9, 300), (15, 599)])
+        init, parts, tail = escpos_parts(img, feed_lines=2)
+        self.assertEqual(len(parts), 3)  # 256 + 256 + 88 rows
+        self.assertEqual(init + b"".join(parts) + tail, to_escpos(img, feed_lines=2))
+        # Each part is a complete command, so a job can stop between them.
+        found, rest = bands(init + parts[0] + tail)
+        self.assertEqual([(w, r) for w, r, _ in found], [(2, 256)])
+        self.assertEqual(rest, b"\n\n" + ESC_FEED_AND_CUT)
+
     def test_bit_packing_black_is_one_msb_first(self):
         width, rows, data = raster_rows(image(16, 2, [(0, 0), (9, 1), (15, 1)]))
         self.assertEqual((width, rows), (2, 2))

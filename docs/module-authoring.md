@@ -145,10 +145,15 @@ from gpta.module_api import Document, Heading, Rule, Text
 def fetch(self, ctx):
     return Document(
         [Heading(title), Text(byline, size="small"), Rule(heavy=True), *body],
-        layout="double",  # "single" (default), "double", "triple"
-        size="small",  # "tiny", "small", "compact", "body" (default), "large", "huge"
+        layout="double",  # "single", "double", "triple"
+        size="small",  # "tiny", "small", "compact", "body", "large", "huge"
     )
 ```
+
+Leave `layout` or `size` out (or `None`) to use the operator's default for
+module output; a plain list does the same for both. The operator can also
+override either per module on its card, which wins over what the module asks
+for, so treat them as a suggestion: don't rely on a particular width.
 
 - `layout` sets body text in one, two or three columns. Headings, rules, QR
   codes and centred or right-aligned text always span the full width, and so
@@ -209,8 +214,9 @@ def fetch(self, ctx):
   `fetch()` (the run reads its own writes back) and saved together once the
   receipt has been built. If `fetch()` raises or times out, or the receipt
   cannot be laid out, nothing is saved, so "seen" items are not lost to a
-  failed run. A print that is skipped (printer off, rate limit) does not
-  undo them: the receipt still appears in the console.
+  failed run. What happens to the print afterwards (printer off, job
+  cancelled or failed in the queue) does not undo them: the receipt still
+  appears in the console.
 - **Each module sees only its own keys.** Use prefixes for families of keys
   (`"seen/123"`) and `keys("seen/")` to list them.
 - **Values are copies.** Change a value, then `set` it again.
@@ -242,7 +248,8 @@ store; read it back with `ctx.store.get(...)` after calling `fetch(ctx)`.
 | Store atomicity | A run's writes are saved together, only if the run succeeds |
 | Log ring | 1000 entries in memory |
 | Emit bound | 100 `ctx.emit` calls per run |
-| Printer | Serialized writes, deadline, 30s spacing, hourly cap |
+| Printer | One queue for every print: serialized writes, deadline, 30s spacing, hourly cap, approval over 2.5 m, pause |
+| Print queue | A module's newer scheduled receipt replaces its waiting one; jobs expire after 24 h |
 | Failure backoff | Interval doubles after each failure, capped at 7 days |
 
 The scheduler dispatches runs asynchronously and uses a monotonic clock, so a

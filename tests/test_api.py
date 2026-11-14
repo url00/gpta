@@ -72,6 +72,98 @@ class ApiTests(unittest.TestCase):
             exc.close()
             return exc.code, body, exc.headers
 
+    def json(self, method, path, body=None):
+        status, raw, _ = self.request(method, path, body)
+        return status, json.loads(raw)
+
+    def test_queue_routes(self):
+        from unittest.mock import patch
+
+        from PIL import Image
+
+        status, queue = self.json("GET", "/api/queue")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            (queue["paused"], queue["pending"], queue["current"]), (False, [], None)
+        )
+        self.assertEqual(queue["warn_length_mm"], 2500)
+        # Printing while the printer is off is refused, not queued.
+        status, _ = self.json("POST", "/api/printer/test", {})
+        self.assertEqual(status, 409)
+
+        self.request("PATCH", "/api/printer", {"enabled": True, "warn_length_mm": 100})
+        status, queue = self.json("POST", "/api/queue/pause", {})
+        self.assertTrue(queue["paused"])
+        state = json.loads(self.request("GET", "/api/state")[1])
+        self.assertTrue(state["printer"]["queue"]["paused"])
+
+        with patch("gpta.printing.transport.send_to_device") as send:
+            status, test = self.json("POST", "/api/printer/test", {})
+            self.assertEqual((status, test["job"]["state"]), (200, "pending"))
+            long = self.service.printer.submit(
+                Image.new("1", (576, 2000), 1), "instant", manual=True
+            )
+            first, second = test["job"]["id"], long["id"]
+            status, raw, headers = self.request("GET", f"/api/queue/{second}.png")
+            self.assertEqual((status, headers["Content-Type"]), (200, "image/png"))
+            self.assertTrue(raw.startswith(b"\x89PNG"))
+
+            status, queue = self.json(
+                "POST", f"/api/queue/{second}/move", {"to": "top"}
+            )
+            self.assertEqual([j["id"] for j in queue["pending"]], [second, first])
+            self.assertTrue(queue["pending"][0]["needs_approval"])
+            status, _ = self.json("POST", f"/api/queue/{second}/move", {"to": "x"})
+            self.assertEqual(status, 400)
+
+            status, queue = self.json("POST", "/api/queue/resume", {})
+            self.assertTrue(self.service.printer.wait_idle())
+            send.assert_not_called()  # the long job holds the queue
+            status, queue = self.json("POST", f"/api/queue/{second}/approve", {})
+            self.assertEqual(status, 200)
+            self.assertTrue(self.service.printer.wait_idle())
+            self.assertEqual(send.call_count, 2)
+
+        status, queue = self.json("GET", "/api/queue")
+        self.assertEqual(queue["pending"], [])
+        self.assertEqual([j["state"] for j in queue["history"]], ["done", "done"])
+        for path in (f"/api/queue/{second}/cancel", "/api/queue/999/approve"):
+            status, _ = self.json("POST", path, {})
+            self.assertEqual(status, 404, path)
+        status, _ = self.json("GET", "/api/queue/999.png")
+        self.assertEqual(status, 404)
+        status, queue = self.json("POST", "/api/queue/clear", {})
+        self.assertEqual(status, 200)
+        status, _, _ = self.request("GET", "/api/queue/pause")
+        self.assertEqual(status, 405)
+
+    def test_module_style_settings(self):
+        status, body = self.json(
+            "PATCH", "/api/modules/affirmations", {"style": {"size": "small"}}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            body["module"]["style"], {"size": "small", "layout": "default"}
+        )
+        for bad in (
+            {"style": {"size": "giant"}},
+            {"style": {"font": "x"}},
+            {"style": 3},
+        ):
+            status, _ = self.json("PATCH", "/api/modules/affirmations", bad)
+            self.assertEqual(status, 400, bad)
+        status, body = self.json(
+            "PATCH", "/api/printer", {"module_layout": "double", "module_size": "large"}
+        )
+        self.assertEqual(status, 200)
+        self.request("POST", "/api/modules/affirmations/run", {})
+        receipt = self.service.outputs.get("affirmations").receipt
+        # The module's own setting beats the printer default; the rest falls
+        # back to it.
+        self.assertEqual((receipt.size, receipt.layout), ("small", "double"))
+        status, _ = self.json("PATCH", "/api/printer", {"module_size": "giant"})
+        self.assertEqual(status, 400)
+
     def test_state_and_static(self):
         status, body, _ = self.request("GET", "/api/state")
         self.assertEqual(status, 200)

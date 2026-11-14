@@ -318,8 +318,8 @@ def build_receipt(
         title=module_name,
         elements=tuple(elements),
         stamp=_utc(now).strftime("%Y-%m-%d %H:%M UTC"),
-        layout=document.layout if document else "single",
-        size=document.size if document else "body",
+        layout=(document.layout if document else None) or "single",
+        size=(document.size if document else None) or "body",
         lead=lead,
     )
 

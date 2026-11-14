@@ -156,7 +156,8 @@ class ServiceTests(unittest.TestCase):
         )
         with patch("gpta.printing.transport.send_to_device") as send:
             result = self.service.run_module("fake")
-        self.assertTrue(result["printed"])
+            self.assertTrue(self.service.printer.wait_idle())
+        self.assertTrue(result["queued"])
         send.assert_called_once()
         self.assertTrue(self.service.snapshot()["printer"]["last_job"])
         with patch(
@@ -164,9 +165,13 @@ class ServiceTests(unittest.TestCase):
             side_effect=PrinterError("no device"),
         ):
             result = self.service.run_module("fake")
+            self.assertTrue(self.service.printer.wait_idle())
         self.assertTrue(result["ok"])
-        self.assertFalse(result["printed"])
-        self.assertEqual(result["module"]["runtime"]["print_error"], "no device")
+        self.assertTrue(result["queued"])  # the failure shows on the job
+        modules = {m["id"]: m for m in self.service.snapshot()["modules"]}
+        module = modules["fake"]
+        self.assertEqual(module["runtime"]["print_error"], "no device")
+        self.assertEqual(self.service.queue()["history"][0]["error"], "no device")
 
     def test_fetch_error_recorded(self):
         result = self.service.run_module("failing")

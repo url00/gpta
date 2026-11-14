@@ -33,7 +33,7 @@ valid JSON stops startup (exit status 78).
 | `server.host`, `server.port` | `127.0.0.1`, `8787` | `--host`/`--port` override for one run |
 | `server.allowed_hosts` | `localhost`, `127.0.0.1`, `::1` | Hostnames the server answers to; add a tunnel's public hostname here |
 | `server.run_timeout_seconds` | `120` | Per-run fetch timeout |
-| `printer.*` | disabled, `/dev/usb/lp0`, 80 mm paper | CUPS queue or device, paper size, auto-print, rate limits; see [Printer](#printer) |
+| `printer.*` | disabled, `/dev/usb/lp0`, 80 mm paper | CUPS queue or device, paper size, auto-print, queue limits, module output defaults; see [Printer](#printer) |
 | `modules.<id>.*` | per module | `enabled`, `interval_seconds`, `limits`, `options` |
 
 For example, behind a Cloudflare tunnel:
@@ -119,13 +119,46 @@ Changing the paper size re-renders the existing previews at the new width.
 The test page shows the font sizes, a ruler with a tick every millimetre
 across the full width (to check the printable edges), and a bar chart.
 
-Writes are serialized and time-limited. Scheduled prints are spaced at least
-`printer.min_print_spacing_seconds` apart (default 30); prints you ask for
-(**Run now**, **Test print**, **Instant** and web page prints) skip the spacing. All prints count toward
-`printer.max_prints_per_hour` (default 60). A skipped print is logged and the
-module card shows why ("Not printed: ..."); a test print over the hourly cap
-returns 429. After `printer.failure_threshold` consecutive failures (default
-3) the printer disables itself; enabling it again clears the count.
+### Print queue
+
+Every print (module runs, **Run now**, **Test print**, **Instant** and web
+pages) becomes a job in one queue, kept in `data/gpta.db`, and one job prints
+at a time, in order. The **Queue** tab shows what is printing, what is
+waiting and what printed recently; waiting jobs can be reordered, cancelled
+or viewed, and the job on the printer can be stopped (as soon as the printer
+allows; what is already on paper stays). The queue is held, with the reason
+shown on every tab, when:
+
+- **Printing is paused.** The **Pause printing** button at the top of every
+  tab is the panic switch: nothing more starts until you resume, even across
+  a restart.
+- **The next job is longer than `printer.warn_length_mm`** (default 2500,
+  2.5 m). It waits, holding the jobs behind it, until you approve or cancel
+  it; shorter jobs ahead of it print first, and you can move other jobs past
+  it. A long Instant or web page print you already confirmed in its dialog
+  is not held again.
+- **The printer is disabled**, by you or automatically after
+  `printer.failure_threshold` consecutive failures (default 3). Enabling it
+  again clears the count and releases the queue. While it is disabled new
+  prints are refused rather than queued.
+- **A limit applies:** at most `printer.max_prints_per_hour` (default 60)
+  jobs start per hour, and automatic prints start at least
+  `printer.min_print_spacing_seconds` apart (default 30). Jobs wait for a
+  slot; they are no longer skipped.
+
+A module's newer scheduled receipt replaces its older one if that is still
+waiting, at most 50 jobs wait at once, and a job still waiting after
+`printer.job_expiry_hours` (default 24) is dropped. A failed job can be
+retried from the Queue tab. A job that was printing when the server stopped
+is marked failed, not printed again.
+
+### Module output defaults
+
+`printer.module_size` and `printer.module_layout` (Printer tab) set the print
+size and column layout of module receipts. Each module card has its own
+**Print size** and **Layout**, which override both the default and what the
+module itself asks for; "Use default" leaves the choice to the module, then
+to the printer default. Changes apply from the module's next run.
 
 ## Security
 
@@ -148,19 +181,29 @@ limits.
 | GET | `/api/logs?since=N` | Log entries after sequence `N`, plus `next` |
 | GET | `/api/output/<id>.png`, `/api/output/total.png` | The receipt image exactly as it prints (`printer.width_px` wide; 404 before any output) |
 | GET | `/api/output/<id>`, `/api/output/total` | The same receipt as plain text, for copying and debugging |
-| PATCH | `/api/modules/<id>` | Update `enabled`, `interval_seconds`, `limits`, `options` |
-| POST | `/api/modules/<id>/run` | Run now (prints if auto-print is on) |
+| PATCH | `/api/modules/<id>` | Update `enabled`, `interval_seconds`, `limits`, `options`, `style` (`size` and `layout`, each `default` or a value) |
+| POST | `/api/modules/<id>/run` | Run now; queues a print if auto-print is on (`queued`, `job`) |
 | PATCH | `/api/printer` | Update printer settings |
 | POST | `/api/instant/preview` | Image of `{"text", "size", "layout", "format"}` as an instant print would draw it (`png` data URL), with `chars` and `paper_mm` (paper length) |
 | POST | `/api/instant/print` | Print `{"text", "size", "layout", "format"}` once; text up to 150,000 characters (requests up to 1 MB). `format` is `plain` (default) or `markdown`: headings, lists, task lists, quotes, code, tables, rules and **bold**. `size` (here and for web pages) is `tiny`, `small`, `compact`, `body`, `large` or `huge`: 12–36 px body text. `layout` (both too) is `single`, `double` (two columns with a centre rule) or `triple` (three, no rules): columns are split between lines, in bands of at most about 15 cm, with headings, rules and a web page's header kept full width |
 | POST | `/api/reader/fetch` | Fetch `{"url", "size", "layout"}` reader-mode style and lay out the whole page. Returns an `id` for printing, a `png` preview, `chars` (characters that will print), `total` (the page's characters; more than `chars` only past the 150,000 safety cap) and `paper_mm` (paper length). Public http(s) sites only |
 | POST | `/api/reader/print` | Print `{"id", "size", "layout"}` from a recent fetch, exactly as previewed. The last 8 fetches are kept, until a restart |
-| POST | `/api/printer/test` | Print a test page |
+| POST | `/api/printer/test` | Queue a test page |
+| GET | `/api/queue` | The print queue: `paused`, `blocked` (why it is held, or null), `current`, `pending`, `history`, `warn_length_mm`. Each job has `id`, `source`, `kind`, `state`, `length_mm`, `needs_approval`, `can_retry`, times and `error` |
+| GET | `/api/queue/<id>.png` | A waiting, printing or failed job's image |
+| POST | `/api/queue/pause`, `/api/queue/resume` | Pause or resume all printing |
+| POST | `/api/queue/clear` | Cancel every waiting job |
+| POST | `/api/queue/<id>/approve` | Let a job over the length limit print |
+| POST | `/api/queue/<id>/cancel` | Cancel a waiting job, or stop the one printing |
+| POST | `/api/queue/<id>/move` | Reorder a waiting job: `{"to": "top" \| "up" \| "down" \| "bottom"}` |
+| POST | `/api/queue/<id>/retry` | Queue a failed job again |
 
 Writes need a JSON body (`{}` or empty is fine). Errors: 400 invalid request or
 settings, 403 disallowed host/origin, 404 unknown module or path, 405 wrong
-method, 409 module already running or printer disabled, 429 test print rate
-limited.
+method, 409 module already running or printer disabled, 429 print queue
+full. Print requests return once the job is queued, with the `job`; pass
+`"confirmed": true` to `/api/instant/print` or `/api/reader/print` to queue a
+job over the length limit already approved.
 
 ## Development
 
@@ -178,7 +221,7 @@ sees files Git tracks, so `git add` new files first.
 |---|---|
 | `gpta/service.py` | Facade used by the HTTP layer; builds `/api/state` |
 | `gpta/runner.py`, `gpta/scheduler.py` | Running modules; deciding when |
-| `gpta/printing/` | Print policy (`printer.py`), device I/O (`transport.py`), ESC/POS raster encoding (`escpos.py`) |
+| `gpta/printing/` | Print queue and policy (`printer.py`), queued jobs (`jobs.py`), device I/O (`transport.py`), ESC/POS raster encoding (`escpos.py`) |
 | `gpta/config.py`, `gpta/registry.py` | Settings; module discovery and validation |
 | `gpta/httpserver.py`, `gpta/http.py` | Console/API server; outbound HTTP client for modules |
 | `gpta/module_api.py` | Module interface: a facade re-exporting everything a module may import |

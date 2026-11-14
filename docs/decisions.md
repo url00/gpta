@@ -192,3 +192,55 @@ Shape:
 **Revisit when** a module needs to query its data (ranges, joins, more rows
 than the key bound): give modules their own tables through a declared
 schema, rather than raw SQL access to the shared file.
+
+## 12. One print queue
+
+**Decision (2026-11-14):** every physical print is a job in one persistent
+queue (`print_jobs` in `data/gpta.db`), and a single dispatcher thread
+prints the head job. `Printer.submit()` adds a job and returns; it no longer
+prints in the caller's thread. This supersedes the "print now or refuse"
+policy of decision 7, keeping its rule that every print goes through
+`Printer.submit()`.
+
+Rationale: the limits used to count jobs, not paper, and were checked only
+at the moment of printing, so an overlong receipt printed in full, a
+rate-limited automatic print was silently lost, and nothing could be seen,
+reordered or stopped. A queue gives one place to hold, show and control
+prints.
+
+- **Hold, don't refuse.** Spacing and the hourly cap delay the queue instead
+  of dropping prints. Only a disabled printer or a full queue (50 jobs)
+  refuses a print.
+- **Length is checked at the head.** A job over `printer.warn_length_mm`
+  holds the queue only when it is next, so short jobs ahead of it still
+  print and the operator can move others past it. A print the operator
+  already confirmed arrives approved.
+- **Pause is state, not config.** It lives in the database, survives
+  restarts, and does not touch `printer.enabled`.
+- **Jobs store the rendered image** (a 1-bit PNG), so what prints is exactly
+  what was queued, whatever the settings are by then. Finished jobs keep
+  their record but not the image, except failed ones, which can be retried.
+- **No automatic reprint.** A job interrupted by a restart or a device
+  failure may be partly on paper; it is marked failed and left to the
+  operator.
+- **Bounded.** A module's newer scheduled receipt replaces its waiting one,
+  jobs expire after `printer.job_expiry_hours`, and 200 finished jobs are
+  kept as history.
+- **Stopping** a job in progress is best effort: a device write is split
+  into raster bands with a check between them; a CUPS job is cancelled.
+
+Module results change with it: a run reports `queued` and the `job`, not
+`printed`; a device failure shows on the job and as the module's
+`print_error`.
+
+## 13. Module output style is the operator's
+
+**Decision (2026-11-14):** the size and layout of a module's receipt are
+resolved at run time in this order: the module's own setting on its card
+(`style`), what the module's `Document` asks for, then the printer's
+`module_size` / `module_layout`. `Document.layout` and `size` default to
+`None` ("no preference").
+
+Rationale: paper and eyesight are the operator's, so their explicit choice
+must win over a module author's; a module's request still beats a global
+default, because the author knows the content.

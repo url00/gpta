@@ -31,6 +31,32 @@ def raster_rows(image: Image.Image) -> tuple[int, int, bytes]:
     return mono.width // 8, mono.height, mono.tobytes("raw", "1;I")
 
 
+def escpos_parts(
+    image: Image.Image,
+    feed_lines: int = 0,
+    cut: bool = True,
+    band_rows: int = BAND_ROWS,
+) -> tuple[bytes, list[bytes], bytes]:
+    """``image`` as ``(init, bands, tail)``: the initialise command, one
+    complete raster command per band, and the feed and cut.
+
+    A print can be stopped cleanly between bands by sending the tail early;
+    stopping inside a band would leave the printer waiting for dot data.
+    """
+    width_bytes, rows, data = raster_rows(image)
+    bands = []
+    for top in range(0, rows, band_rows):
+        height = min(band_rows, rows - top)
+        bands.append(
+            GS_RASTER
+            + width_bytes.to_bytes(2, "little")
+            + height.to_bytes(2, "little")
+            + data[top * width_bytes : (top + height) * width_bytes]
+        )
+    tail = b"\n" * max(0, int(feed_lines)) + (ESC_FEED_AND_CUT if cut else b"")
+    return ESC_INIT, bands, tail
+
+
 def to_escpos(
     image: Image.Image,
     feed_lines: int = 0,
@@ -38,14 +64,5 @@ def to_escpos(
     band_rows: int = BAND_ROWS,
 ) -> bytes:
     """Initialise, print ``image`` in raster bands, feed, then optionally cut."""
-    width_bytes, rows, data = raster_rows(image)
-    out = bytearray(ESC_INIT)
-    for top in range(0, rows, band_rows):
-        height = min(band_rows, rows - top)
-        out += GS_RASTER
-        out += width_bytes.to_bytes(2, "little") + height.to_bytes(2, "little")
-        out += data[top * width_bytes : (top + height) * width_bytes]
-    out += b"\n" * max(0, int(feed_lines))
-    if cut:
-        out += ESC_FEED_AND_CUT
-    return bytes(out)
+    init, bands, tail = escpos_parts(image, feed_lines, cut, band_rows)
+    return init + b"".join(bands) + tail
