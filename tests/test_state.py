@@ -1,11 +1,12 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
 from gpta.config import ConfigStore
 from gpta.logbus import LogBus
-from gpta.module_api import Block, FetchError, Module
+from gpta.module_api import Block, Document, FetchError, Module, Text
 from gpta.service import Service
 
 
@@ -20,10 +21,14 @@ class DailyModule(Module):
         "options": {},
     }
     fail = False
+    document = False
 
     def fetch(self, ctx):
         if self.fail:
             raise FetchError("down")
+        if self.document:
+            body = [Text("word " * 40)] * 6
+            return Document(body, layout="double", size="small")
         return [Block("DAILY", ("hello",))]
 
 
@@ -144,11 +149,18 @@ class RestartTests(unittest.TestCase):
         self.assertIsNone(runtime.last_ok)
         self.assertIsNone(service.outputs.get("daily"))
 
-    def test_state_file_is_written_after_each_run(self):
+    def saved(self):
+        db = sqlite3.connect(self.data / "gpta.db")
+        try:
+            rows = db.execute("SELECT module_id, data FROM module_state").fetchall()
+        finally:
+            db.close()
+        return {module_id: json.loads(data) for module_id, data in rows}
+
+    def test_state_is_saved_after_each_run(self):
         service = self.start()
         service.run_module("daily")
-        saved = json.loads((self.data / "state.json").read_text())
-        entry = saved["modules"]["daily"]
+        entry = self.saved()["daily"]
         self.assertEqual(entry["last_run_ts"], self.wall[0])
         self.assertEqual(entry["run_count"], 1)
         receipt = entry["output"]["receipt"]
@@ -157,7 +169,41 @@ class RestartTests(unittest.TestCase):
             receipt["blocks"],
             [{"kind": "block", "title": "DAILY", "lines": ["hello"], "meta": {}}],
         )
-        self.assertEqual(list(self.data.glob("*.tmp")), [])
+        self.assertFalse((self.data / "state.json").exists())
+
+    def test_state_json_is_imported_once(self):
+        self.write_output({"lines": ["old"], "generated_at": "x"})
+        first = self.start()
+        self.assertEqual(self.runtime(first).run_count, 1)
+        self.assertFalse((self.data / "state.json").exists())
+        self.assertTrue((self.data / "state.json.migrated").exists())
+        self.assertEqual(self.saved()["daily"]["run_count"], 1)
+        # A stale file left behind later does not override the database.
+        first.run_module("daily")
+        self.write_output({"lines": ["stale"], "generated_at": "x"})
+        second = self.restart(advance_wall=60)
+        self.assertEqual(self.runtime(second).run_count, 2)
+        self.assertIn("hello", second.output_text("daily"))
+
+    def test_corrupt_database_is_moved_aside(self):
+        (self.data / "gpta.db").write_bytes(b"this is not a database" * 100)
+        with self.assertLogs("gpta.storage", "WARNING"):
+            service = self.start()
+        self.assertIsNone(self.runtime(service).last_run_at)
+        self.assertEqual(len(list(self.data.glob("gpta.db.corrupt-*"))), 1)
+        service.run_module("daily")
+        self.assertEqual(self.saved()["daily"]["run_count"], 1)
+
+    def test_document_style_survives_restart(self):
+        self.module.document = True
+        first = self.start()
+        first.run_module("daily")
+        receipt = self.saved()["daily"]["output"]["receipt"]
+        self.assertEqual((receipt["layout"], receipt["size"]), ("double", "small"))
+        png = first.output_png("daily")
+        second = self.restart(advance_wall=60)
+        self.assertEqual(second.output_png("daily"), png)
+        self.assertEqual(second.outputs.get("daily").receipt.layout, "double")
 
     def write_output(self, output):
         entry = {"last_run_ts": self.wall[0], "run_count": 1, "output": output}

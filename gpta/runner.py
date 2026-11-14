@@ -11,9 +11,11 @@ from typing import Any
 
 from PIL import Image
 
+from .blocks import Block, Document
+from .cache import Cache
 from .config import PAPERS, ConfigStore
 from .errors import AlreadyRunning, ModuleStuck, ModuleTimeout, NotFound
-from .module_api import Block, Cache, Module, ModuleContext
+from .module_api import Module, ModuleContext
 from .outputs import OutputStore
 from .printing import (
     AutoPrintOff,
@@ -24,6 +26,7 @@ from .printing import (
 )
 from .renderer import Receipt, build_receipt, render_image
 from .state import StateStore
+from .storage import Database, ModuleStore
 
 log = logging.getLogger("gpta.runner")
 
@@ -102,11 +105,14 @@ class ModuleRunner:
         *,
         fetch_timeout: float,
         state: StateStore | None = None,
+        db: Database | None = None,
         clock=time.time,
         monotonic=time.monotonic,
     ):
         self.config = config
         self.state = state
+        # Module stores live here; without a database they last the process.
+        self.db = db if db is not None else Database(None)
         self.registry = registry
         self.outputs = outputs
         self.printer = printer
@@ -171,6 +177,7 @@ class ModuleRunner:
         error: str | None = None
         printed = False
         module_log(f"run started ({trigger})", "info", module_id)
+        store = ModuleStore(self.db, module_id)
 
         try:
             now = self._now()
@@ -183,19 +190,23 @@ class ModuleRunner:
                 http=self.http,
                 cache=self.cache,
                 log=self._make_emitter(module_id),
+                store=store,
             )
-            blocks = self._fetch_with_timeout(module, ctx)
-            if not blocks:
-                blocks = [Block("No content", ("No items available.",))]
+            content = self._fetch_with_timeout(module, ctx)
+            if not content or (isinstance(content, Document) and not content.elements):
+                content = [Block("No content", ("No items available.",))]
             receipt = build_receipt(
                 module.name,
-                blocks,
+                content,
                 max_chars=int(cfg["limits"]["max_chars"]),
                 now=now,
             )
             # Render now, so a layout error fails the run and the preview and
             # the print share one image.
             image = render_image(receipt, ticket.width_px)
+            # The run has its receipt: keep what the module saved. A failure
+            # to save fails the run before anything is shown or printed.
+            store.commit()
             self.outputs.set(module_id, receipt, self._iso_now(), image=image)
             with self._lock:
                 runtime = self._runtime[module_id]
@@ -204,7 +215,7 @@ class ModuleRunner:
                 runtime.print_error = None
                 runtime.print_skipped = None
                 runtime.consecutive_failures = 0
-            module_log(f"fetched {len(blocks)} block(s)", "info", module_id)
+            module_log(f"fetched {len(receipt.elements)} block(s)", "info", module_id)
             printed = self._auto_print(module_id, image, manual=trigger == "manual")
         except Exception as exc:
             error = str(exc)
@@ -217,6 +228,7 @@ class ModuleRunner:
                 runtime.print_skipped = None
                 runtime.consecutive_failures += 1
         finally:
+            store.discard()  # no-op after a commit; drops a failed run's writes
             with self._lock:
                 runtime = self._runtime[module_id]
                 runtime.running = False
@@ -228,7 +240,7 @@ class ModuleRunner:
                     round((self.monotonic() - started) * 1000)
                 )
 
-        self._persist()
+        self._persist(module_id)
         result: dict[str, Any] = {"ok": error is None, "printed": printed}
         with self._lock:
             result["print_skipped"] = self._runtime[module_id].print_skipped
@@ -403,32 +415,31 @@ class ModuleRunner:
             return
         self.outputs.set(module_id, receipt, generated_at)
 
-    def _persist(self) -> None:
+    def _persist(self, module_id: str) -> None:
+        """Save one module's run state and latest receipt."""
         if self.state is None:
             return
         with self._persist_lock:
-            modules: dict[str, dict[str, Any]] = {}
             with self._lock:
-                for module_id, runtime in self._runtime.items():
-                    if runtime.last_run_ts is None:
-                        continue
-                    modules[module_id] = {
-                        "last_run_ts": runtime.last_run_ts,
-                        "last_run_at": runtime.last_run_at,
-                        "last_ok": runtime.last_ok,
-                        "last_error": runtime.last_error,
-                        "last_duration_ms": runtime.last_duration_ms,
-                        "run_count": runtime.run_count,
-                        "consecutive_failures": runtime.consecutive_failures,
-                    }
-            for module_id, entry in modules.items():
-                output = self.outputs.get(module_id)
-                if output is not None:
-                    entry["output"] = {
-                        "receipt": output.receipt.to_dict(),
-                        "generated_at": output.generated_at,
-                    }
-            self.state.save_modules(modules)
+                runtime = self._runtime[module_id]
+                if runtime.last_run_ts is None:
+                    return
+                entry: dict[str, Any] = {
+                    "last_run_ts": runtime.last_run_ts,
+                    "last_run_at": runtime.last_run_at,
+                    "last_ok": runtime.last_ok,
+                    "last_error": runtime.last_error,
+                    "last_duration_ms": runtime.last_duration_ms,
+                    "run_count": runtime.run_count,
+                    "consecutive_failures": runtime.consecutive_failures,
+                }
+            output = self.outputs.get(module_id)
+            if output is not None:
+                entry["output"] = {
+                    "receipt": output.receipt.to_dict(),
+                    "generated_at": output.generated_at,
+                }
+            self.state.save_module(module_id, entry)
 
     # -- helpers -------------------------------------------------------
     def _now(self) -> datetime:

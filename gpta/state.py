@@ -1,71 +1,103 @@
-"""Runtime state that survives a restart: ``data/state.json``.
+"""Run state that survives a restart, in the ``module_state`` table.
 
 Holds, per module, when it last ran (wall-clock epoch seconds), how that run
 went, its failure count, and its latest receipt. Without it every restart
 would run, and print, every enabled module straight away.
 
-The file is a cache of runtime facts, not configuration: a missing, corrupt,
-or partly invalid file is logged and ignored, never fatal.
+It is a record of runtime facts, not configuration: missing, unreadable, or
+partly invalid data is logged and ignored, never fatal.
+
+Before the database this lived in ``data/state.json``. That file is imported
+once, when the table is still empty, and renamed ``state.json.migrated``.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
-import threading
+import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
+from .storage import Database
+
 log = logging.getLogger("gpta.state")
 
-STATE_VERSION = 1
+LEGACY_VERSION = 1
 
 
 class StateStore:
-    def __init__(self, path: Path):
-        self.path = Path(path)
-        self._lock = threading.Lock()
+    def __init__(self, db: Database, legacy_path: Path | None = None):
+        self.db = db
+        self.legacy_path = Path(legacy_path) if legacy_path else None
 
     def load_modules(self) -> dict[str, dict[str, Any]]:
         """Return saved per-module state, or ``{}`` if there is none usable."""
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            with self.db.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT module_id, data FROM module_state"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            log.warning("ignoring unreadable run state: %s", exc)
+            return {}
+        if not rows:
+            return self._import_legacy()
+        modules: dict[str, dict[str, Any]] = {}
+        for module_id, data in rows:
+            try:
+                entry = json.loads(data)
+            except ValueError:
+                entry = None
+            if isinstance(entry, dict):
+                modules[module_id] = entry
+            else:
+                log.warning("ignoring unreadable run state of %s", module_id)
+        return modules
+
+    def save_module(self, module_id: str, entry: dict[str, Any]) -> None:
+        """Replace one module's saved state. Failures are logged, not raised."""
+        try:
+            data = json.dumps(entry, sort_keys=True)
+            with self.db.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO module_state VALUES (?, ?, ?)"
+                    " ON CONFLICT (module_id) DO UPDATE SET"
+                    " data=excluded.data, updated_at=excluded.updated_at",
+                    (module_id, data, time.time()),
+                )
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            log.error("could not save run state of %s: %s", module_id, exc)
+
+    # -- state.json from before the database ---------------------------
+    def _import_legacy(self) -> dict[str, dict[str, Any]]:
+        path = self.legacy_path
+        if path is None:
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
         except (OSError, ValueError) as exc:
-            log.warning("ignoring unreadable %s: %s", self.path, exc)
+            log.warning("ignoring unreadable %s: %s", path, exc)
             return {}
-        if not isinstance(raw, dict) or raw.get("version") != STATE_VERSION:
-            log.warning("ignoring %s: unknown format", self.path)
+        if not isinstance(raw, dict) or raw.get("version") != LEGACY_VERSION:
+            log.warning("ignoring %s: unknown format", path)
             return {}
         modules = raw.get("modules")
         if not isinstance(modules, dict):
             return {}
-        return {
+        modules = {
             module_id: entry
             for module_id, entry in modules.items()
             if isinstance(module_id, str) and isinstance(entry, dict)
         }
-
-    def save_modules(self, modules: dict[str, dict[str, Any]]) -> None:
-        """Atomically replace the saved state. Failures are logged, not raised."""
-        payload = json.dumps(
-            {"version": STATE_VERSION, "modules": modules}, indent=2, sort_keys=True
-        )
-        with self._lock:
-            try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                fd, tmp_name = tempfile.mkstemp(
-                    dir=self.path.parent, prefix=f".{self.path.name}.", suffix=".tmp"
-                )
-                try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                        handle.write(payload + "\n")
-                    os.replace(tmp_name, self.path)
-                except BaseException:
-                    Path(tmp_name).unlink(missing_ok=True)
-                    raise
-            except OSError as exc:
-                log.error("could not save %s: %s", self.path, exc)
+        for module_id, entry in modules.items():
+            self.save_module(module_id, entry)
+        try:
+            path.replace(path.with_name(path.name + ".migrated"))
+        except OSError as exc:
+            log.warning("could not rename %s: %s", path, exc)
+        log.info("imported %s into the database", path.name)
+        return modules

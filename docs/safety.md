@@ -18,8 +18,12 @@ records what happens when things go wrong.
 | Repeated print failures | `failure_threshold` consecutive failures | Printer auto-disabled, error logged, `disabled_reason` exposed | Re-enable in the UI/API |
 | Repeated module failures | Non-zero `consecutive_failures` | Effective interval doubles, capped at 7 days | One success resets it |
 | Wall-clock jump | Scheduling uses `time.monotonic()` | No burst or stall; wall clock is only used to carry last-run times across restarts | Automatic |
-| Server restart | `data/state.json` (last run, result, failure count, latest receipt per module) | Only modules that are due run; backoff continues; a saved run time in the future counts as "just ran" | Automatic |
-| State file missing or corrupt | `StateStore.load_modules()` | Warning logged; modules start as never run (each enabled module runs once) | Automatic; rewritten after the next run |
+| Server restart | `data/gpta.db` (last run, result, failure count, latest receipt per module; each module's `ctx.store`) | Only modules that are due run; backoff continues; a saved run time in the future counts as "just ran" | Automatic |
+| Database missing | `Database` | A new one is created; modules start as never run (each enabled module runs once) and with empty stores | Automatic |
+| Database corrupt or from a newer GPTA | `Database` | Warning logged; the file is moved to `gpta.db.corrupt-<time>` and a new one started. If that fails too, state is kept in memory until the next restart (error logged) | Automatic; inspect or delete the moved file |
+| Run state cannot be saved (disk full) | `StateStore.save_module()` | Error logged; the run still counts | Free space; saved after the next run |
+| Module store cannot be saved, or is over its bounds | `ModuleStore.commit()` | The run fails before anything is shown or printed; nothing is saved; backoff applies | Fix the module or free space |
+| Module run fails or times out after writing to its store | Writes are held until the run succeeds | Nothing is saved; a timed-out worker's later writes raise | Automatic |
 | Stored setting unknown or invalid (e.g. after a module schema change) | `ConfigStore.load()` | Warning logged; the setting falls back to its default; other settings are kept | Automatic; the file is rewritten on the next save |
 | Config file unreadable (not JSON / not an object) | `ConfigStore.load()` | Startup exits with status 78 and a one-line error; systemd does not restart on 78 | Fix/remove `data/config.json` |
 | Unknown module/output | Route lookup | `404` | — |

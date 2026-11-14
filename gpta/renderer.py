@@ -27,9 +27,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .blocks import (
     KINDS,
+    LAYOUTS,
+    PRINT_SIZES,
     BarChart,
     Block,
     Checkbox,
+    Document,
     Element,
     Heading,
     KeyValue,
@@ -37,6 +40,7 @@ from .blocks import (
     Rule,
     Text,
     from_dict,
+    lead_of,
     size_of,
     to_dict,
 )
@@ -171,19 +175,35 @@ class Ruler:
 class Receipt:
     """A module's receipt: header title, content, and footer timestamp.
 
-    An empty ``title`` or ``stamp`` omits the header or footer.
+    An empty ``title`` or ``stamp`` omits the header or footer. ``layout``
+    (one of :data:`LAYOUTS`), ``size`` (one of :data:`PRINT_SIZES`) and
+    ``lead`` (how many leading elements stay full width in columns) say how
+    it is set on the paper; they are saved with it, so a receipt renders the
+    same wherever it is rendered.
     """
 
     title: str
     elements: tuple[Any, ...]
     stamp: str = ""
+    layout: str = "single"
+    size: str = "body"
+    lead: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "title": self.title,
             "stamp": self.stamp,
             "blocks": [to_dict(element) for element in self.elements],
         }
+        # Only what differs from the defaults, so plain receipts stay as
+        # they were saved before receipts had a style.
+        if self.layout != "single":
+            data["layout"] = self.layout
+        if self.size != "body":
+            data["size"] = self.size
+        if self.lead:
+            data["lead"] = self.lead
+        return data
 
     @classmethod
     def from_dict(cls, data: Any) -> Receipt:
@@ -194,7 +214,15 @@ class Receipt:
             raise ValueError("receipt title and stamp must be strings")
         if not isinstance(blocks, list):
             raise ValueError("receipt blocks must be a list")
-        return cls(title, tuple(from_dict(block) for block in blocks), stamp)
+        layout, size, lead = data.get("layout"), data.get("size"), data.get("lead")
+        return cls(
+            title,
+            tuple(from_dict(block) for block in blocks),
+            stamp,
+            layout if layout in LAYOUTS else "single",
+            size if size in PRINT_SIZES else "body",
+            lead if type(lead) is int and lead > 0 else 0,
+        )
 
     @classmethod
     def from_lines(cls, lines: Iterable[str]) -> Receipt:
@@ -273,14 +301,26 @@ def check_elements(elements: Any) -> list[Element]:
 
 def build_receipt(
     module_name: str,
-    elements: Sequence[Element],
+    content: Sequence[Element] | Document,
     max_chars: int | None = None,
     now: datetime | None = None,
 ) -> Receipt:
+    """The receipt for what ``fetch()`` returned: a list of blocks, or a
+    :class:`Document` that also carries the layout and print size."""
+    document = content if isinstance(content, Document) else None
+    elements = truncate(
+        check_elements(document.elements if document else content), max_chars
+    )
+    lead = lead_of(elements)
+    if document is not None and document.lead is not None:
+        lead = min(document.lead, len(elements))
     return Receipt(
         title=module_name,
-        elements=tuple(truncate(check_elements(elements), max_chars)),
+        elements=tuple(elements),
         stamp=_utc(now).strftime("%Y-%m-%d %H:%M UTC"),
+        layout=document.layout if document else "single",
+        size=document.size if document else "body",
+        lead=lead,
     )
 
 
@@ -416,16 +456,6 @@ THEMES = {
 }
 
 
-#: Text sizes offered for one-off prints (Instant, web pages): the body size
-#: in px on 80 mm paper. Everything else on the receipt scales with it.
-PRINT_SIZES = {
-    "tiny": 12,
-    "small": 16,
-    "compact": 20,
-    "body": 24,
-    "large": 30,
-    "huge": 36,
-}
 # Smallest font drawn after scaling; below this, glyphs stop being legible.
 MIN_FONT_PX = 11
 
@@ -841,7 +871,6 @@ def _layout_ruler(out: _Layout) -> None:
     out.add(32, paint)
 
 
-LAYOUTS = ("single", "double", "triple")
 #: Columns per layout; only two columns get a dividing rule.
 LAYOUT_COLUMNS = {"single": 1, "double": 2, "triple": 3}
 # Tallest a column may grow before the text continues in a new band below,
@@ -853,19 +882,24 @@ COLUMN_RULE_PX = 2
 def render_image(
     receipt: Receipt,
     width_px: int,
-    scale: float = 1.0,
+    scale: float | None = None,
     *,
-    layout: str = "single",
-    lead: int = 0,
+    layout: str | None = None,
+    lead: int | None = None,
 ) -> Image.Image:
     """``receipt`` as a 1-bit image ``width_px`` dots wide (0 = black).
 
-    ``scale`` multiplies every font size (see :func:`print_scale`).
-    ``layout="double"`` or ``"triple"`` sets body text in two or three
-    columns; the first ``lead`` elements (a header), headings, rules and
-    centred text stay full width.
+    The receipt's own ``size``, ``layout`` and ``lead`` are used unless
+    overridden here. ``scale`` multiplies every font size (see
+    :func:`print_scale`). ``layout="double"`` or ``"triple"`` sets body text
+    in two or three columns; the first ``lead`` elements (a header),
+    headings, rules and centred text stay full width.
     """
-    columns = LAYOUT_COLUMNS[layout]
+    if scale is None:
+        scale = print_scale(receipt.size)
+    if lead is None:
+        lead = receipt.lead
+    columns = LAYOUT_COLUMNS[receipt.layout if layout is None else layout]
     if columns > 1:
         with _RENDER_LOCK:
             return _render_columns(receipt, int(width_px), scale, lead, columns)

@@ -66,12 +66,14 @@ unit name.
 
 Logs: `data/server.log` (rotated) for manual starts, the journal under systemd.
 
-Restarts are safe: `data/state.json` records when each module last ran, how
-it went, and its latest receipt (as blocks, re-rendered on load), so a restart
-only runs modules that are due (for example, one whose daily run was missed
-while the server was down runs once). Receipts saved as text by older versions
-show as plain text until the module next runs. Delete the file to make every
-enabled module run on the next start.
+Restarts are safe: `data/gpta.db` (SQLite) records when each module last ran,
+how it went, and its latest receipt (as blocks, re-rendered on load), so a
+restart only runs modules that are due (for example, one whose daily run was
+missed while the server was down runs once). It also holds the state modules
+save for themselves (`ctx.store`). A `data/state.json` from an older version
+is imported on the first start and renamed `state.json.migrated`. Delete
+`gpta.db` (with the server stopped) to make every enabled module run on the
+next start and forget its saved state.
 
 ## Modules
 
@@ -182,7 +184,9 @@ sees files Git tracks, so `git add` new files first.
 | `gpta/printing/` | Print policy (`printer.py`), device I/O (`transport.py`), ESC/POS raster encoding (`escpos.py`) |
 | `gpta/config.py`, `gpta/registry.py` | Settings; module discovery and validation |
 | `gpta/httpserver.py`, `gpta/http.py` | Console/API server; outbound HTTP client for modules |
-| `gpta/module_api.py`, `gpta/blocks.py` | Module interface; receipt block kinds |
+| `gpta/module_api.py` | Module interface: a facade re-exporting everything a module may import |
+| `gpta/blocks.py`, `gpta/markdown.py` | Receipt block kinds and `Document` (layout, print size); Markdown to blocks |
+| `gpta/storage.py`, `gpta/state.py`, `gpta/cache.py` | SQLite database and module stores (`ctx.store`); run state kept across restarts; download cache (`ctx.cache`) |
 | `gpta/renderer.py`, `gpta/fonts/` | Receipt layout (image and plain text); the bundled font and its license |
 | `modules/<id>/` | One module per folder |
 | `web/` | Console (plain HTML/CSS/JS, no build step) |

@@ -10,6 +10,7 @@ locks only around their own state and never call out while holding them.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import secrets
 import threading
 import time
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__, markdown, reader
-from .blocks import Rule, Text, size_of
+from .blocks import LAYOUTS, PRINT_SIZES, Text, size_of
 from .config import PAPERS, ConfigStore
 from .errors import InvalidRequest, NotFound
 from .http import HttpClient
@@ -29,11 +30,8 @@ from .outputs import OutputStore
 from .printing import Printer, PrinterWriter
 from .registry import describe
 from .renderer import (
-    LAYOUTS,
-    PRINT_SIZES,
     Receipt,
     build_receipt,
-    print_scale,
     render_image,
     render_text,
     test_receipt,
@@ -43,6 +41,7 @@ from .renderer import (
 from .runner import ModuleRunner, module_log
 from .scheduler import Scheduler
 from .state import StateStore
+from .storage import Database
 
 #: Longest text the Instant tab may print in one job.
 #: Longest Instant text. Like web pages, long text prints whole; this only
@@ -50,25 +49,16 @@ from .state import StateStore
 INSTANT_MAX_CHARS = 150_000
 
 
-def print_style(body: dict, elements=()) -> dict[str, Any]:
-    """Keyword arguments for :func:`render_image` from a request's ``size``
-    and ``layout``. In two columns, everything up to the first heavy rule
-    (a web page's header) stays full width."""
+def print_style(body: dict) -> dict[str, str]:
+    """The ``layout`` and ``size`` a request asks for, as :class:`Receipt`
+    fields. Raises InvalidRequest for a value that is not offered."""
     layout = body.get("layout", "single")
     if layout not in LAYOUTS:
         raise InvalidRequest(f"layout must be one of {', '.join(LAYOUTS)}")
-    lead = next(
-        (i + 1 for i, e in enumerate(elements) if isinstance(e, Rule) and e.heavy), 0
-    )
-    return {"scale": print_size(body), "layout": layout, "lead": lead}
-
-
-def print_size(body: dict) -> float:
-    """The font scale for ``body["size"]``, one of :data:`PRINT_SIZES`."""
     size = body.get("size", "body")
     if size not in PRINT_SIZES:
         raise InvalidRequest(f"size must be one of {', '.join(PRINT_SIZES)}")
-    return print_scale(size)
+    return {"layout": layout, "size": size}
 
 
 #: How Instant text is read: as is, or as Markdown.
@@ -90,12 +80,13 @@ def instant_receipt(body: Any) -> Receipt:
     form = body.get("format", "plain")
     if form not in INSTANT_FORMATS:
         raise InvalidRequest(f"format must be one of {', '.join(INSTANT_FORMATS)}")
+    style = print_style(body)
     if form == "plain":
-        return Receipt(title="", elements=(Text(text.strip("\n")),), stamp="")
+        return Receipt("", (Text(text.strip("\n")),), **style)
     elements = markdown.to_blocks(text)
     if not elements:
         raise InvalidRequest("the Markdown has nothing to print")
-    return Receipt(title="", elements=tuple(elements), stamp="")
+    return Receipt("", tuple(elements), **style)
 
 
 #: Longest article text the reader keeps; the rest is cut with a marker.
@@ -145,6 +136,7 @@ class Service:
             fetch_timeout = config.snapshot()["server"]["run_timeout_seconds"]
 
         self.outputs = OutputStore()
+        self.db = Database(config.data_dir / "gpta.db")
         self.printer = Printer(
             config, writer=printer_writer, clock=clock, monotonic=monotonic
         )
@@ -155,7 +147,8 @@ class Service:
             self.printer,
             http or HttpClient(),
             fetch_timeout=fetch_timeout,
-            state=StateStore(config.data_dir / "state.json"),
+            state=StateStore(self.db, config.data_dir / "state.json"),
+            db=self.db,
             clock=clock,
             monotonic=monotonic,
         )
@@ -174,6 +167,7 @@ class Service:
     def stop(self) -> None:
         self.scheduler.stop()
         self.printer.stop()
+        self.db.close()
 
     def tick(self) -> None:
         self.scheduler.tick()
@@ -212,8 +206,7 @@ class Service:
 
     def instant_preview(self, body: Any) -> dict[str, Any]:
         """The image an instant print would produce, as a PNG data URL."""
-        receipt = instant_receipt(body)
-        image = render_image(receipt, self._width_px(), **print_style(body))
+        image = render_image(instant_receipt(body), self._width_px())
         return {
             "png": _png_url(image),
             "height_px": image.height,
@@ -222,8 +215,7 @@ class Service:
         }
 
     def instant_print(self, body: Any) -> dict[str, Any]:
-        receipt = instant_receipt(body)
-        image = render_image(receipt, self._width_px(), **print_style(body))
+        image = render_image(instant_receipt(body), self._width_px())
         self.printer.submit(image, "instant", manual=True)
         module_log(f"instant print: {len(body['text'])} characters")
         return {"ok": True}
@@ -244,11 +236,9 @@ class Service:
             raise InvalidRequest(str(exc)) from exc
         total = sum(size_of(element) for element in article.body)
         elements = article.elements(truncate(article.body, READER_MAX_CHARS))
-        receipt = self._reader_receipt(elements)
+        receipt = self._reader_receipt(elements, body)
         module_log(f"reader fetched {page.url}: {total} characters")
-        image = render_image(
-            receipt, self._width_px(), **print_style(body, receipt.elements)
-        )
+        image = render_image(receipt, self._width_px())
         page_id = secrets.token_hex(8)
         with self._reader_lock:
             self._reader_pages[page_id] = elements
@@ -275,16 +265,17 @@ class Service:
             elements = self._reader_pages.get(page_id)
         if elements is None:
             raise InvalidRequest("that page is no longer loaded; fetch it again")
-        receipt = self._reader_receipt(elements)
-        style = print_style(body, receipt.elements)
-        image = render_image(receipt, self._width_px(), **style)
+        image = render_image(self._reader_receipt(elements, body), self._width_px())
         self.printer.submit(image, "reader", manual=True)
         module_log(f"reader print: {image.height // DOTS_PER_MM} mm")
         return {"ok": True}
 
-    def _reader_receipt(self, elements: list) -> Receipt:
+    def _reader_receipt(self, elements: list, body: dict) -> Receipt:
+        """A web page's receipt; its header (up to the heavy rule) stays
+        full width in columns."""
         now = datetime.fromtimestamp(self.clock(), UTC)
-        return build_receipt("", elements, now=now)
+        receipt = build_receipt("", elements, now=now)
+        return dataclasses.replace(receipt, **print_style(body))
 
     def _width_px(self) -> int:
         return _paper(self.config.snapshot())["width_px"]

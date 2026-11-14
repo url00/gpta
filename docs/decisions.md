@@ -106,7 +106,7 @@ by the renderer and the raster encoder.
 - Modules still return data, not images: small frozen, JSON-serialisable
   block dataclasses (`gpta/blocks.py`), so receipts can be saved and
   re-rendered at a new paper width, and the IPC route in decision 1 stays
-  open. `state.json` stores blocks, not PNGs.
+  open. Saved state stores blocks, not PNGs.
 - The preview PNG is the printed image, pixel for pixel.
 
 **Revisit when** the target hardware needs a dependency-free build (Pillow
@@ -125,3 +125,70 @@ by Nix. Only the renderer uses it; it supplies the module matrix and GPTA
 draws the dots, so the preview stays pixel for pixel what prints.
 
 **Revisit when** a dependency-free build is needed (see decision 8).
+
+## 10. Formatting belongs to the receipt, and modules reach it through one facade
+
+**Decision (2026-11-14):** a `Receipt` carries its own `layout`, `size` and
+`lead`, and `render_image(receipt, width)` reads them. Modules choose them by
+returning a `Document` from `fetch()`; a plain list still works and means the
+defaults. Markdown is available to modules as `markdown_blocks`. Everything a
+module may use is exported from `gpta/module_api.py`, which only re-exports:
+blocks and `Document` from `blocks.py`, Markdown from `markdown.py`, the
+download cache from `cache.py`, and the store from `storage.py`.
+
+Rationale: columns, print size and Markdown were built for the Instant and
+web page tabs and wired up in `service.py` as arguments to the renderer, so
+module receipts could not use them and a saved receipt could not remember
+them. Putting the style on the receipt gives every source (modules, Instant,
+web pages, anything later) the same path: build a receipt, render it. The
+style is saved with the blocks, so it survives a restart and a paper change.
+
+- `module_api` must stay importable without Pillow, so `Document`, `LAYOUTS`
+  and `PRINT_SIZES` live in `blocks.py`, not the renderer.
+- Layout stays data, not code: a module names a layout, it does not draw.
+  That keeps the IPC route in decision 1 open.
+
+**Revisit when** `renderer.py` (about 1,100 lines) gains another block kind
+or layout: split it into a `gpta/render/` package (text, layout, columns,
+plain text) behind the same `build_receipt` / `render_image` functions.
+
+## 11. State in SQLite
+
+**Decision (2026-11-14):** durable state lives in one SQLite file,
+`data/gpta.db`, through the standard library's `sqlite3` (no new
+dependency). It holds the host's per-module run state (previously the whole
+of `data/state.json`, rewritten after every run) and a key/value store for
+each module, `ctx.store`. An existing `state.json` is imported once and
+renamed `state.json.migrated`.
+
+Options considered:
+
+- **One JSON file per module** (the previous approach, extended): simple and
+  readable, but every write rewrites the whole file, there are no
+  transactions across keys, and each new kind of state needs its own file
+  handling and locking.
+- **`shelve` / `dbm`:** standard library, but the file format depends on the
+  platform's dbm, values are pickles (unsafe to load, opaque to inspect), and
+  it has no transactions or safe concurrent access.
+- **SQLite:** standard library, one file, atomic transactions, crash-safe
+  (WAL), inspectable with the `sqlite3` command, and room to add real tables
+  and queries later.
+
+Shape:
+
+- Modules get a key/value API with JSON values, not SQL. It covers what
+  modules need today (seen items, cursors, counters), keeps module code
+  independent of the schema, and can be carried over IPC (decision 1).
+- A run's writes are saved in one transaction, and only if the run produced
+  a receipt, so a failed or timed-out run cannot leave state that disagrees
+  with what was printed.
+- Like `state.json`, the database is never fatal: a file that cannot be
+  opened is moved aside (`gpta.db.corrupt-<time>`) and a new one started.
+- Schema changes are scripts appended to `storage.MIGRATIONS`, tracked by
+  `PRAGMA user_version`.
+- `config.json` stays JSON: it is configuration, and people edit it by hand.
+  The download cache stays as files: entries are large and evictable.
+
+**Revisit when** a module needs to query its data (ranges, joins, more rows
+than the key bound): give modules their own tables through a declared
+schema, rather than raw SQL access to the shared file.

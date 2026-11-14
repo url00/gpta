@@ -5,6 +5,11 @@ out as an image and prints it. Modules run in-process
 in the server. The host enforces **time and size** bounds; it does not sandbox
 code.
 
+Everything a module needs is imported from `gpta.module_api`: the block
+kinds, `Document` (layout and print size), `markdown_blocks`, and the types
+of the context's helpers. Don't import other `gpta.*` files from a module;
+they are host internals and may move.
+
 ## Adding a module
 
 1. Create `modules/<id>/module.py` with exactly one `Module` subclass whose
@@ -102,7 +107,62 @@ wrapped to the paper width; don't pre-wrap or pad it.
 frozen dataclasses with plain fields, so the host can save them as JSON and
 re-render them later (for example at a new paper width); `Block.meta` is
 saved only if it is JSON-serialisable and never printed. Returning anything
-else from `fetch()` fails the run.
+other than blocks (or a `Document` of blocks, below) from `fetch()` fails the
+run.
+
+`Text` also takes `bold_spans`: `(start, end)` character ranges of the text
+to print in bold, end exclusive, e.g. `Text("Due today", bold_spans=((4, 9),))`.
+
+## Markdown
+
+`markdown_blocks(text)` turns Markdown into blocks, the same way the Instant
+tab does: headings, paragraphs, bullet, numbered and task lists, quotes,
+code, tables and rules; `**bold**` prints bold, and links print as their text
+with the address in brackets. Use it for content that arrives as Markdown
+(notes, issue bodies, LLM output) and mix the result with your own blocks:
+
+```python
+from gpta.module_api import Heading, Rule, markdown_blocks
+
+
+def fetch(self, ctx):
+    note = ctx.http.get_text(NOTE_URL)
+    return [Heading("Today's note"), Rule(), *markdown_blocks(note)]
+```
+
+The text is still untrusted data: Markdown can only produce the block kinds
+above, and `max_chars` applies to the result.
+
+## Layout and print size
+
+To choose how the receipt is set on the paper, return a `Document` instead
+of a list:
+
+```python
+from gpta.module_api import Document, Heading, Rule, Text
+
+
+def fetch(self, ctx):
+    return Document(
+        [Heading(title), Text(byline, size="small"), Rule(heavy=True), *body],
+        layout="double",  # "single" (default), "double", "triple"
+        size="small",  # "tiny", "small", "compact", "body" (default), "large", "huge"
+    )
+```
+
+- `layout` sets body text in one, two or three columns. Headings, rules, QR
+  codes and centred or right-aligned text always span the full width, and so
+  do the first `lead` blocks. By default the lead is everything up to and
+  including the first `Rule(heavy=True)`, so a header written as above stays
+  full width; pass `lead=0` (or another count) to override.
+- `size` scales every font on the receipt; `Text(size=...)` stays relative
+  to it.
+- The names are exported as `LAYOUTS` and `PRINT_SIZES`, so a module can
+  offer them as a `select` option:
+  `{"type": "select", "label": "Layout", "choices": list(LAYOUTS)}`.
+
+The layout and size are saved with the receipt, so the preview, the print
+and the receipt restored after a restart all match.
 
 Text keeps its Unicode characters. Characters the font has no glyph for
 (e.g. CJK, emoji) print as `�`; control characters become spaces.
@@ -111,8 +171,8 @@ labels, values) plus one per rule and per bar, not the header and footer. When a
 the block that crosses it is cut short, later blocks are dropped, and
 `[truncated]` is printed.
 
-QR codes and images are not available yet. They will be new block kinds
-alongside these, so existing modules won't change.
+Images are not available yet. They will be a new block kind alongside these,
+so existing modules won't change.
 
 ## The context
 
@@ -121,13 +181,51 @@ alongside these, so existing modules won't change.
 | `limits`, `options` | The validated settings for this run |
 | `now` | Run time (UTC `datetime`) |
 | `http` | `get_json`, `get_text`, `request_json`, `post_form_json` |
-| `cache` | `read_text(key)` / `write_text(key, text)`, e.g. key `"<id>/item.txt"` |
+| `cache` | `read_text(key)` / `write_text(key, text)`, e.g. key `"<id>/item.txt"`. For downloads: entries may be evicted |
+| `store` | The module's saved state: `get(key, default=None)`, `set(key, value)`, `delete(key)`, `keys(prefix="")`, `items(prefix="")`, `key in store` |
 | `emit(message, level)` | Log to the console; level `debug`, `info`, `warning`, `error` |
 | `data_dir` | The data directory (for credentials files; prefer `cache` for downloads) |
 
 Raise `gpta.module_api.FetchError` when source data is unavailable.
 `gpta.http.FetchError` subclasses it, so `except FetchError` covers both your
 errors and network failures. Any exception fails the run and triggers backoff.
+
+## Saved state
+
+`ctx.store` is a key/value store that belongs to the module and survives
+restarts (it lives in `data/gpta.db`). Keys are strings; values are anything
+JSON can hold (dicts, lists, strings, numbers, booleans, `None`).
+
+```python
+def fetch(self, ctx):
+    seen = set(ctx.store.get("seen", []))
+    fresh = [item for item in self._items(ctx) if item["id"] not in seen]
+    ctx.store.set("seen", sorted(seen | {item["id"] for item in fresh})[-500:])
+    ctx.store.set("last_fetch", ctx.now.isoformat())
+    return [Text(item["title"]) for item in fresh]
+```
+
+- **Writes are saved when the run succeeds.** They are held in memory during
+  `fetch()` (the run reads its own writes back) and saved together once the
+  receipt has been built. If `fetch()` raises or times out, or the receipt
+  cannot be laid out, nothing is saved, so "seen" items are not lost to a
+  failed run. A print that is skipped (printer off, rate limit) does not
+  undo them: the receipt still appears in the console.
+- **Each module sees only its own keys.** Use prefixes for families of keys
+  (`"seen/123"`) and `keys("seen/")` to list them.
+- **Values are copies.** Change a value, then `set` it again.
+- **Bounds:** keys up to 200 characters, values up to 1 MB of JSON, 10,000
+  keys per module. Going over raises `StoreError`, which fails the run. Trim
+  lists you append to, as above.
+- **Changing a stored value's shape** is the module's job: read old values
+  defensively (`get` with a default, check types), as with any saved data.
+
+Use `store` for facts the module must not lose (what was printed, cursors,
+counters), `cache` for anything that can be downloaded again, and options
+for what the user chooses.
+
+In tests, `ModuleContext(...)` without `store=` gets an empty in-memory
+store; read it back with `ctx.store.get(...)` after calling `fetch(ctx)`.
 
 ## Host guarantees
 
@@ -140,6 +238,8 @@ errors and network failures. Any exception fails the run and triggers backoff.
 | HTTP body bound | 2 MB per response; JSON raises, text truncates |
 | HTTP timeout | 10s per request (`ctx.http`) |
 | Cache bound | 50 MB / 30 days, LRU eviction (`ctx.cache`) |
+| Store bound | 10,000 keys per module, 1 MB per value (`ctx.store`) |
+| Store atomicity | A run's writes are saved together, only if the run succeeds |
 | Log ring | 1000 entries in memory |
 | Emit bound | 100 `ctx.emit` calls per run |
 | Printer | Serialized writes, deadline, 30s spacing, hourly cap |
@@ -155,10 +255,12 @@ A module **must**:
 
 - Return from `fetch()` promptly and avoid unbounded loops.
 - Use `ctx.http` for all network access, so timeouts and body caps apply.
-- Use `ctx.cache` for downloads rather than writing into `data/` directly.
+- Use `ctx.cache` for downloads and `ctx.store` for state rather than
+  writing into `data/` directly.
 - Join any thread it starts before returning. Do not spawn subprocesses.
 - Treat input data as untrusted text. It is printed literally (blocks have no
-  markup), so it cannot change the layout beyond its own length.
+  markup), so it cannot change the layout beyond its own length. Pass it
+  through `markdown_blocks` only when it is meant to be Markdown.
 
 A module **must not**:
 

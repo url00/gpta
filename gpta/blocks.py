@@ -1,8 +1,8 @@
 """Receipt block kinds: the data a module returns from ``fetch()``.
 
 Every kind is a small frozen dataclass that converts to and from plain JSON
-(:func:`to_dict` / :func:`from_dict`), so receipts can be saved in
-``state.json`` and, later, sent over IPC. New kinds (images, say) are
+(:func:`to_dict` / :func:`from_dict`), so receipts can be saved in the
+database and, later, sent over IPC. New kinds (images, say) are
 added by defining a dataclass with a ``kind`` and registering it in
 :data:`KINDS`; the renderer then needs a layout function for it.
 """
@@ -16,6 +16,19 @@ from typing import Any, ClassVar
 
 ALIGNS = ("left", "center", "right")
 SIZES = ("small", "body", "large", "huge")
+
+#: Page layouts: body text in one, two or three columns.
+LAYOUTS = ("single", "double", "triple")
+#: Print sizes for a whole receipt: the body text size in px on 80 mm paper.
+#: Everything else on the receipt scales with it.
+PRINT_SIZES = {
+    "tiny": 12,
+    "small": 16,
+    "compact": 20,
+    "body": 24,
+    "large": 30,
+    "huge": 36,
+}
 
 
 def _str(value: Any, name: str) -> str:
@@ -216,6 +229,43 @@ KINDS: dict[str, type] = {
     cls.kind: cls
     for cls in (Block, Heading, Text, Rule, KeyValue, Checkbox, BarChart, QrCode)
 }
+
+
+def lead_of(elements: Any) -> int:
+    """How many leading elements form the header: everything up to and
+    including the first heavy rule, or 0 if there is none."""
+    for index, element in enumerate(elements):
+        if isinstance(element, Rule) and element.heavy:
+            return index + 1
+    return 0
+
+
+@dataclass(frozen=True)
+class Document:
+    """Blocks plus how to set them on the paper.
+
+    ``fetch()`` may return one instead of a plain list. ``layout`` is one of
+    :data:`LAYOUTS` and ``size`` one of :data:`PRINT_SIZES`. In a column
+    layout the first ``lead`` blocks stay full width, as do headings, rules,
+    QR codes and centred text; by default (``None``) the lead is everything
+    up to the first heavy rule.
+    """
+
+    elements: tuple[Element, ...]
+    layout: str = "single"
+    size: str = "body"
+    lead: int | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.elements, (str, dict)) or not hasattr(
+            self.elements, "__iter__"
+        ):
+            raise TypeError("Document.elements must be a list of blocks")
+        object.__setattr__(self, "elements", tuple(self.elements))
+        _choice(self.layout, "Document.layout", LAYOUTS)
+        _choice(self.size, "Document.size", tuple(PRINT_SIZES))
+        if self.lead is not None and (type(self.lead) is not int or self.lead < 0):
+            raise ValueError("Document.lead must be a whole number, 0 or more")
 
 
 def text_of(element: Element) -> str:
