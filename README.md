@@ -81,15 +81,12 @@ next start and forget its saved state.
 |---|---|---|---|
 | `affirmations` | 1 day | 500 chars | include date |
 | `hackernews` | 7 days | 5 items, 1500 chars | window days, min score, scan limit |
-| `gutenberg` | 1 day | 1800 chars | book id, language, cache |
 | `google_tasks` | 1 hour | 15 items, 2000 chars | credentials file, list id, completed |
 
 - **Daily Affirmation** picks one line per day from
   `modules/affirmations/data/affirmations.txt`; edit that file to customise.
 - **Hacker News Weekly** scans the current top stories, keeps those inside the
   window, and prints the highest-scoring `max_items`.
-- **Project Gutenberg** prints the opening of a random plain-text book (or a
-  fixed `book_id`), caching downloads under `data/cache/gutenberg/`.
 - **Google Tasks** prints pending tasks from one list. One-time setup: enable
   the Tasks API in Google Cloud, create a **Desktop app** OAuth client, then
   run `GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... python3 scripts/google_oauth.py`.

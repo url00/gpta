@@ -14,8 +14,6 @@ from gpta.module_api import (
     FetchError,
     Heading,
     ModuleContext,
-    Rule,
-    Text,
 )
 from gpta.registry import discover
 from gpta.renderer import build_receipt, render_image
@@ -142,53 +140,6 @@ class ModuleTests(unittest.TestCase):
         self.assertIsInstance(chart, BarChart)
         self.assertEqual([bar.value for bar in chart.bars], [200, 100])
         self.assertEqual(render_image(build_receipt("HN", blocks), 384).width, 384)
-
-    def test_gutenberg_excerpt_and_cache(self):
-        opds = """<?xml version="1.0" encoding="utf-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <entry>
-    <id>urn:gutenberg:11:2</id>
-    <title>Alice</title>
-    <content type="text">Lewis Carroll</content>
-  </entry>
-</feed>"""
-        text = (
-            "*** START OF THE PROJECT GUTENBERG EBOOK ALICE ***\n\n"
-            "CHAPTER I\n\nCall me Ishmael. This is a sufficiently long paragraph "
-            "that survives metadata filtering and becomes receipt content.\n\n"
-            "A second paragraph--with a double hyphen--follows it.\n\n"
-            "*** END OF THE PROJECT GUTENBERG EBOOK ALICE ***\n"
-        )
-        http = FakeHttp(
-            {},
-            {
-                "https://www.gutenberg.org/ebooks/11.opds": opds,
-                "https://www.gutenberg.org/cache/epub/11/pg11.txt": text,
-            },
-        )
-        module = self.modules["gutenberg"]
-        with tempfile.TemporaryDirectory() as tmp:
-            ctx = make_ctx(
-                "gutenberg",
-                http,
-                tmp,
-                limits={"max_items": 1, "max_chars": 1800},
-                options={"book_id": 11, "language": "en", "cache": True},
-            )
-            blocks = module.fetch(ctx)
-            cached = Path(tmp) / "cache" / "gutenberg" / "11.txt"
-            self.assertTrue(cached.is_file())
-        self.assertEqual(blocks[0], Heading("Alice"))
-        self.assertEqual(blocks[1], Text("by Lewis Carroll", size="small"))
-        self.assertIsInstance(blocks[2], Rule)
-        paragraphs = [block.text for block in blocks[3:]]
-        self.assertIn("Call me Ishmael", paragraphs[0])
-        self.assertEqual(
-            paragraphs[1],
-            "A second paragraph\u2014with a double hyphen\u2014follows it.",
-        )
-        self.assertNotIn("START OF THE PROJECT", " ".join(paragraphs))
-        self.assertEqual(render_image(build_receipt("PG", blocks), 576).width, 576)
 
     def test_google_tasks(self):
         http = FakeHttp(

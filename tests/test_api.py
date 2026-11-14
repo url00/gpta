@@ -78,7 +78,7 @@ class ApiTests(unittest.TestCase):
         state = json.loads(body)
         self.assertEqual(
             [m["id"] for m in state["modules"]],
-            ["affirmations", "google_tasks", "gutenberg", "hackernews"],
+            ["affirmations", "google_tasks", "hackernews"],
         )
         self.assertFalse(state["printer"]["enabled"])
         self.assertNotIn("logs", state)
@@ -119,11 +119,11 @@ class ApiTests(unittest.TestCase):
         status, _, _ = self.request("GET", "/api/output/nope.png")
         self.assertEqual(status, 404)
 
-        for module_id in ("affirmations", "gutenberg"):
+        for module_id in ("affirmations", "hackernews"):
             self.request("PATCH", f"/api/modules/{module_id}", {"enabled": True})
         self.service.outputs.set(
-            "gutenberg",
-            build_receipt("Project Gutenberg", [Text("Call me Ishmael.")]),
+            "hackernews",
+            build_receipt("Hacker News Weekly", [Text("Top story.")]),
             "2026-10-18T12:00:00+00:00",
         )
         self.request("POST", "/api/modules/affirmations/run", {})
@@ -132,10 +132,10 @@ class ApiTests(unittest.TestCase):
         self.assertIn(module.mode, ("1", "L"))
         total = self.png("/api/output/total.png")
         self.assertEqual(total.size[0], 576)
-        gutenberg = self.png("/api/output/gutenberg.png")
-        self.assertGreater(total.size[1], module.size[1] + gutenberg.size[1])
+        other = self.png("/api/output/hackernews.png")
+        self.assertGreater(total.size[1], module.size[1] + other.size[1])
         state = json.loads(self.request("GET", "/api/state")[1])
-        self.assertEqual(state["total"]["module_ids"], ["affirmations", "gutenberg"])
+        self.assertEqual(state["total"]["module_ids"], ["affirmations", "hackernews"])
 
         # Changing the paper re-renders the existing output at the new width.
         self.request("PATCH", "/api/printer", {"paper": "58mm"})

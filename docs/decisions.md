@@ -26,7 +26,7 @@ modules grows much further.
 ## 2. Context extension point
 
 **Decision (2026-10-18):** extend `ModuleContext` with a bounded `cache`
-helper (used by Gutenberg, available to all modules) instead of adding a second
+helper (available to all modules) instead of adding a second
 fetch API.
 
 - Cached storage: `ctx.cache.read_text/write_text`, 50 MB / 30 day LRU cap.

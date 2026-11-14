@@ -17,7 +17,7 @@ from pathlib import Path
 class Cache:
     """Bounded on-disk cache shared by modules.
 
-    Entries are addressed by a relative key such as ``"gutenberg/11.txt"``.
+    Entries are addressed by a relative key such as ``"<module id>/item.txt"``.
     Writes are atomic; reads touch the file so the size-based eviction pass
     approximates LRU. Expired entries and oversized caches are pruned on every
     write. One instance is shared by all runs so its lock serialises eviction.
