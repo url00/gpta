@@ -1,7 +1,8 @@
 """Latest receipt per module, and the combined "total" receipt.
 
 Receipts are kept as blocks and rendered on demand, so a paper size change
-applies to existing output too. Images are cached per module and width.
+applies to existing output too. Images are cached per module, width and
+line spacing.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from PIL import Image
 
 from .renderer import (
     Receipt,
+    double_spaced,
     render_image,
     render_text,
     render_total,
@@ -38,7 +40,7 @@ class OutputStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latest: dict[str, Output] = {}
-        self._images: dict[str, tuple[Output, int, Image.Image]] = {}
+        self._images: dict[str, tuple[Output, int, bool, Image.Image]] = {}
 
     def set(
         self,
@@ -55,7 +57,7 @@ class OutputStore:
             if image is None:
                 self._images.pop(module_id, None)
             else:
-                self._images[module_id] = (output, image.width, image)
+                self._images[module_id] = (output, image.width, double_spaced(), image)
 
     def get(self, module_id: str) -> Output | None:
         with self._lock:
@@ -68,12 +70,13 @@ class OutputStore:
             cached = self._images.get(module_id)
         if output is None:
             return None
-        if cached and cached[0] is output and cached[1] == width_px:
-            return cached[2]
+        spaced = double_spaced()
+        if cached and cached[0] is output and cached[1:3] == (width_px, spaced):
+            return cached[3]
         image = render_image(output.receipt, width_px)
         with self._lock:
             if self._latest.get(module_id) is output:
-                self._images[module_id] = (output, width_px, image)
+                self._images[module_id] = (output, width_px, spaced, image)
         return image
 
     def _sections(self, module_ids: Iterable[str]) -> list[tuple[str, Output]]:

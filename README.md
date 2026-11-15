@@ -208,7 +208,11 @@ pages) becomes a job in one queue, kept in `data/gpta.db`, and one job prints
 at a time, in order. The **Queue** tab shows what is printing, what is
 waiting and what printed recently; waiting jobs can be reordered, cancelled
 or viewed, and the job on the printer can be stopped (as soon as the printer
-allows; what is already on paper stays). The queue is held, with the reason
+allows; what is already on paper stays). The **Double space** switch
+next to the pause button leaves a blank line under every line of text, for
+handwritten notes; it applies to everything rendered after it is switched
+(previews and paper estimates included), not to jobs already waiting, and it
+is kept across restarts. The queue is held, with the reason
 shown on every tab, when:
 
 - **Printing is paused.** The **Pause printing** button at the top of every
@@ -275,9 +279,10 @@ limits.
 | GET | `/s/<token>` | A scanned QR selection code: runs the module's `on_select()` for that item and prints the result; answers with a small HTML page. Repeats within 30 seconds are ignored; `410` once expired |
 | GET | `/api/selections` | `public_url` and the 50 newest selection codes: `path`, `module`, `title`, `expires_at`, `expired`, `use_count`, `last_used_at`, `last_result` |
 | POST | `/api/selections/test` | Make a sample selection list from `{"count", "side", "qr", "numbered", "rules", "expires_hours"}` and return its `png` preview and the code list; `"print": true` also prints it. Scanning a test code prints a confirmation |
-| GET | `/api/queue` | The print queue: `paused`, `blocked` (why it is held, or null), `current`, `pending`, `history`, `warn_length_mm`. Each job has `id`, `source`, `kind`, `state`, `length_mm`, `needs_approval`, `can_retry`, times and `error` |
+| GET | `/api/queue` | The print queue: `paused`, `blocked` (why it is held, or null), `double_spaced`, `current`, `pending`, `history`, `warn_length_mm`. Each job has `id`, `source`, `kind`, `state`, `length_mm`, `needs_approval`, `can_retry`, times and `error` |
 | GET | `/api/queue/<id>.png` | A waiting, printing or failed job's image |
 | POST | `/api/queue/pause`, `/api/queue/resume` | Pause or resume all printing |
+| POST | `/api/queue/double`, `/api/queue/single` | Double space everything rendered from now on (a blank line under each line of text, for notes), or go back to single. Kept across restarts; jobs already queued are not re-rendered |
 | POST | `/api/queue/clear` | Cancel every waiting job |
 | POST | `/api/queue/<id>/approve` | Let a job over the length limit print |
 | POST | `/api/queue/<id>/cancel` | Cancel a waiting job, or stop the one printing |

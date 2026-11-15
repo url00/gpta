@@ -433,7 +433,9 @@ pre { margin: 0.35rem 0 0; font: inherit; }
 .queue-bar .status { text-decoration: none; }
 .queue-bar .status.error { text-decoration: none; }
 .queue-bar button { padding: 0.25rem 0.6rem; }
-.queue-bar button.paused { background: var(--ink); color: var(--paper); }
+.queue-bar button.paused,
+.queue-bar button.on { background: var(--ink); color: var(--paper); }
+.queue-buttons { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 
 .queue-panel { max-width: 72ch; }
 .queue-panel > h2 { margin-bottom: 0.4rem; }

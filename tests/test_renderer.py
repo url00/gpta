@@ -25,6 +25,7 @@ from gpta.renderer import (
     render_text,
     render_total,
     render_total_image,
+    set_double_spaced,
     test_receipt,
     to_png,
     truncate,
@@ -352,6 +353,35 @@ class PlainTextTests(unittest.TestCase):
         lines = render_total([["one"], ["two"]], 10)
         self.assertEqual(lines, ["one", "", "=" * 10, "", "two"])
         self.assertEqual(render_total([], 10), ["No output from enabled modules."])
+
+
+class DoubleSpacingTests(unittest.TestCase):
+    def tearDown(self):
+        set_double_spaced(False)
+
+    def test_double_spacing_doubles_text_lines(self):
+        receipt = Receipt("", (Text("one\ntwo\nthree\nfour\nfive\nsix"),))
+        single = render_image(receipt, 576)
+        set_double_spaced(True)
+        double = render_image(receipt, 576)
+        columns = render_image(receipt, 576, layout="double")
+        set_double_spaced(False)
+        self.assertGreater(double.height, single.height * 1.6)
+        self.assertLess(double.height, single.height * 2)
+        self.assertGreater(columns.height, 1)
+        self.assertEqual(render_image(receipt, 576).height, single.height)
+
+    def test_output_cache_follows_spacing(self):
+        from gpta.outputs import OutputStore
+
+        store = OutputStore()
+        receipt = Receipt("", (Text("one\ntwo\nthree"),))
+        store.set("m", receipt, "now", image=render_image(receipt, 576))
+        single = store.image("m", 576)
+        set_double_spaced(True)
+        double = store.image("m", 576)
+        self.assertGreater(double.height, single.height)
+        self.assertIs(store.image("m", 576), double)
 
 
 if __name__ == "__main__":

@@ -52,6 +52,7 @@ from .renderer import (
     build_receipt,
     render_image,
     render_text,
+    set_double_spaced,
     test_receipt,
     to_png,
     truncate,
@@ -221,6 +222,7 @@ class Service:
             config, self.runner, clock=clock, monotonic=monotonic
         )
         self.printer.on_result = self.runner.note_print
+        set_double_spaced(self.printer.jobs.double_spaced())
         self._descriptions = {
             module_id: describe(module) for module_id, module in registry.items()
         }
@@ -511,6 +513,14 @@ class Service:
             self.printer.pause()
         else:
             self.printer.resume()
+        return self.printer.queue()
+
+    def queue_spacing(self, double: bool) -> dict[str, Any]:
+        """Double space everything rendered from now on (kept across
+        restarts). Jobs already queued keep the image they were given."""
+        self.printer.jobs.set_double_spaced(double)
+        set_double_spaced(double)
+        module_log(f"line spacing: {'double' if double else 'single'}")
         return self.printer.queue()
 
     def queue_clear(self) -> dict[str, Any]:

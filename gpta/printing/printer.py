@@ -222,6 +222,7 @@ class Printer:
         current = self.jobs.printing()
         return {
             "paused": self.jobs.paused(),
+            "double_spaced": self.jobs.double_spaced(),
             "blocked": reason,
             "warn_length_mm": cfg["warn_length_mm"],
             "current": self._public(current, cfg) if current else None,

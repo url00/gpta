@@ -518,9 +518,25 @@ def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     )
 
 
+# The console's "double space" switch: every line of text takes twice its
+# height, leaving a blank line below it for handwritten notes. Process-wide,
+# because it applies to everything rendered, whatever asked for it.
+_double_spaced = False
+
+
+def set_double_spaced(on: bool) -> None:
+    global _double_spaced
+    _double_spaced = bool(on)
+
+
+def double_spaced() -> bool:
+    return _double_spaced
+
+
 def _line_height(face: ImageFont.FreeTypeFont) -> int:
     ascent, descent = face.getmetrics()
-    return ascent + descent + max(2, face.size // 8)
+    height = ascent + descent + max(2, face.size // 8)
+    return height * 2 if _double_spaced else height
 
 
 def _wrap_px(text: str, face: ImageFont.FreeTypeFont, width: int) -> list[str]:

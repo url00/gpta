@@ -316,17 +316,29 @@ class JobStore:
         return True
 
     # -- settings ------------------------------------------------------
-    def paused(self) -> bool:
+    def _flag(self, key: str) -> bool:
         with self.db.transaction() as conn:
             row = conn.execute(
-                "SELECT value FROM host_settings WHERE key='print_paused'"
+                "SELECT value FROM host_settings WHERE key=?", (key,)
             ).fetchone()
         return bool(row) and row[0] == "1"
 
-    def set_paused(self, paused: bool) -> None:
+    def _set_flag(self, key: str, on: bool) -> None:
         with self.db.transaction() as conn:
             conn.execute(
-                "INSERT INTO host_settings VALUES ('print_paused', ?)"
+                "INSERT INTO host_settings VALUES (?, ?)"
                 " ON CONFLICT (key) DO UPDATE SET value=excluded.value",
-                ("1" if paused else "0",),
+                (key, "1" if on else "0"),
             )
+
+    def paused(self) -> bool:
+        return self._flag("print_paused")
+
+    def set_paused(self, paused: bool) -> None:
+        self._set_flag("print_paused", paused)
+
+    def double_spaced(self) -> bool:
+        return self._flag("double_spaced")
+
+    def set_double_spaced(self, on: bool) -> None:
+        self._set_flag("double_spaced", on)

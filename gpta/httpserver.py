@@ -78,7 +78,11 @@ ROUTES: list[tuple[str, re.Pattern[str], str]] = [
         ("PATCH", r"/api/server", "patch_server"),
         ("GET", r"/api/queue", "queue"),
         ("GET", r"/api/queue/(?P<job_id>\d{1,12})\.png", "queue_png"),
-        ("POST", r"/api/queue/(?P<action>pause|resume|clear)", "queue_control"),
+        (
+            "POST",
+            r"/api/queue/(?P<action>pause|resume|clear|double|single)",
+            "queue_control",
+        ),
         (
             "POST",
             r"/api/queue/(?P<job_id>\d{1,12})/(?P<action>approve|cancel|retry|move)",
@@ -269,6 +273,8 @@ class Handler(BaseHTTPRequestHandler):
         service = self.server.service
         if action == "clear":
             self._json(200, service.queue_clear())
+        elif action in ("double", "single"):
+            self._json(200, service.queue_spacing(action == "double"))
         else:
             self._json(200, service.queue_pause(action == "pause"))
 

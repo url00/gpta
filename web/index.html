@@ -12,10 +12,13 @@
       <h1>GPTA</h1>
       <span id="server-status" class="status">connecting...</span>
     </div>
-    <!-- Shown on every tab: the panic switch and what the queue is doing. -->
+    <!-- Shown on every tab: the panic switch, the note-taking spacing switch and what the queue is doing. -->
     <div class="queue-bar">
       <a id="queue-chip" class="status" href="#queue" data-goto="queue">queue idle</a>
-      <button id="queue-pause" type="button" class="secondary">Pause printing</button>
+      <span class="queue-buttons">
+        <button id="queue-spacing" type="button" class="secondary" aria-pressed="false" title="Leave a blank line under every printed line, for notes">Double space: off</button>
+        <button id="queue-pause" type="button" class="secondary">Pause printing</button>
+      </span>
     </div>
     <!-- To add a tab: add a button here and a matching section below.
          data-tab is the URL hash; ids follow tab-<name> / panel-<name>. -->
