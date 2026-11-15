@@ -235,6 +235,8 @@ class Node:
     attrs: dict[str, str] = field(default_factory=dict)
     children: list[Node | str] = field(default_factory=list)
     parent: Node | None = None
+    #: Pictures and other non-text content inside (see :func:`_count_media`).
+    media: int = 0
 
 
 class _TreeBuilder(HTMLParser):
@@ -303,6 +305,43 @@ def _junk(node: Node) -> bool:
         return False
     names = f"{attrs.get('class', '')} {attrs.get('id', '')}".split()
     return any(JUNK.match(name) for name in names)
+
+
+# Content that is not text and cannot be printed: counted, so a caller can
+# tell a page of prose from one that leans on pictures.
+MEDIA = {
+    "img", "picture", "figure", "video", "audio", "svg", "canvas", "iframe",
+    "object", "embed", "math",
+}  # fmt: skip
+# Images at most this many pixels wide or high are icons, not content.
+ICON_PX = 48
+_INLINE = {"a", "button", "summary", "label", *HEADINGS}
+
+
+def _icon(node: Node, inline: bool) -> bool:
+    if node.tag == "svg" and inline:
+        return True  # a link or heading's decoration
+    for name in ("width", "height"):
+        value = node.attrs.get(name, "").removesuffix("px")
+        if value.isdigit() and int(value) <= ICON_PX:
+            return True
+    return False
+
+
+def _count_media(node: Node, inline: bool = False) -> int:
+    """Set ``media`` on ``node`` and everything under it: how many pictures,
+    videos, embeds and formulas it holds, outside page furniture. Run before
+    :func:`_prune`, which removes them."""
+    total = 0
+    for child in node.children:
+        if isinstance(child, str):
+            continue
+        if child.tag in MEDIA:
+            total += 0 if _icon(child, inline) else 1  # a figure counts once
+        elif not _junk(child):
+            total += _count_media(child, inline or child.tag in _INLINE)
+    node.media = total
+    return total
 
 
 def _prune(node: Node) -> None:
@@ -378,7 +417,8 @@ def _content_root(root: Node) -> Node:
             or isinstance(child, Node)
             and (scores.get(id(child), 0) >= floor or child.tag in HEADINGS)
         ]
-        return Node("div", children=kept, parent=parent)
+        media = sum(child.media for child in kept if isinstance(child, Node))
+        return Node("div", children=kept, parent=parent, media=media)
     mains = [n for n in _walk(root) if n.tag == "main"]
     if mains:
         return mains[0]
@@ -457,6 +497,13 @@ class Article:
     byline: str
     url: str
     body: tuple[Element, ...]
+    #: What the article is made of, for judging how well it prints: words
+    #: of text in all, how many of them are code (``pre``), table rows, and
+    #: pictures, videos, embeds and formulas left out (icons not counted).
+    words: int = 0
+    code_words: int = 0
+    table_rows: int = 0
+    media: int = 0
 
     def elements(self, body: Sequence[Element] | None = None) -> list[Element]:
         """The article as receipt blocks: a header, a heavy rule, then the
@@ -503,9 +550,24 @@ def extract(html: str, url: str) -> Article:
     if byline.startswith(("http://", "https://")):
         byline = ""
     root = builder.root
+    _count_media(root)
     _prune(root)
     body: list[Element] = []
-    _emit(_content_root(root), body, title)
+    content = _content_root(root)
+    _emit(content, body, title)
     if not any(isinstance(b, Text) for b in body):
         raise ReaderError("no readable text found on the page")
-    return Article(title, site, byline, url, tuple(body))
+    nodes = list(_walk(content))
+    return Article(
+        title,
+        site,
+        byline,
+        url,
+        tuple(body),
+        words=sum(len(block.text.split()) for block in body if hasattr(block, "text")),
+        code_words=sum(
+            len(_text(node, raw=True).split()) for node in nodes if node.tag == "pre"
+        ),
+        table_rows=sum(1 for node in nodes if node.tag == "tr"),
+        media=content.media,
+    )

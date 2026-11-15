@@ -196,3 +196,44 @@ class ExtractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContentStatsTests(unittest.TestCase):
+    """What an article is made of, for judging how well it prints."""
+
+    PAGE = """<html><head><title>Stats</title></head><body>
+    <nav><img src="logo.png"></nav>
+    <article>
+      <h1>Stats <a href="#x"><svg></svg></a></h1>
+      <p>one two three four five six seven eight nine ten.</p>
+      <img src="avatar.png" width="32" height="32">
+      <img src="photo.jpg" width="800">
+      <figure><img src="chart.png"><figcaption>A chart</figcaption></figure>
+      <p>eleven twelve thirteen fourteen fifteen sixteen seventeen.</p>
+      <iframe src="https://video.example/embed"></iframe>
+      <pre>code words here</pre>
+      <table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>
+      <div class="share"><img src="share.png"></div>
+    </article>
+    <footer><img src="footer.png"></footer>
+    </body></html>"""
+
+    def test_counts(self):
+        article = reader.extract(self.PAGE, "https://x.example/stats")
+        # The photo, the figure (once) and the embed; not the logo, the
+        # avatar, the heading's icon, or anything in page furniture.
+        self.assertEqual(article.media, 3)
+        self.assertEqual(article.code_words, 3)
+        self.assertEqual(article.table_rows, 2)
+        # 10 + 7 prose words, 3 of code, 2 rows of "x | y".
+        self.assertEqual(article.words, 10 + 7 + 3 + 6)
+
+    def test_counts_without_an_article_element(self):
+        body = "".join(
+            f"<p>Paragraph {n} has enough words, commas, and length to count.</p>"
+            for n in range(6)
+        )
+        page = f"<html><body><div id='c'><img src='a.jpg'>{body}</div></body></html>"
+        article = reader.extract(page, "https://x.example/")
+        self.assertEqual(article.media, 1)
+        self.assertEqual(article.words, 6 * 10)

@@ -18,7 +18,7 @@ from .blocks import Block, Document, Element
 from .cache import Cache
 from .config import PAPERS, ConfigStore
 from .errors import AlreadyRunning, ModuleStuck, ModuleTimeout, NotFound
-from .module_api import FetchError, Module, ModuleContext, Skip
+from .module_api import FetchError, Module, ModuleContext, Reading, Skip
 from .outputs import OutputStore
 from .printing import (
     AutoPrintOff,
@@ -69,24 +69,38 @@ class PageReader:
     def __init__(self, runner: ModuleRunner):
         self._runner = runner
 
-    def article(self, url: str) -> list[Element]:
-        """Download ``url`` and return the article as blocks."""
+    def read(self, url: str) -> Reading:
+        """Download ``url`` and return the article with what it is made of."""
         try:
             page = self._runner.page_fetcher(url)
         except reader.ReaderError as exc:
             raise FetchError(str(exc)) from exc
-        return self.html(page.html, page.url)
+        return self.read_html(page.html, page.url)
 
-    def html(self, html: str, url: str, title: str = "") -> list[Element]:
-        """The article in ``html`` (a page or a fragment) as blocks. ``url``
-        is where it came from; ``title`` replaces the page's own."""
+    def read_html(self, html: str, url: str, title: str = "") -> Reading:
+        """The same for ``html`` (a page or a fragment). ``url`` is where it
+        came from; ``title`` replaces the page's own."""
         try:
             article = reader.extract(html, url)
         except reader.ReaderError as exc:
             raise FetchError(str(exc)) from exc
         if title:
             article = dataclasses.replace(article, title=title)
-        return article.elements(truncate(article.body, SELECT_MAX_CHARS))
+        return Reading(
+            tuple(article.elements(truncate(article.body, SELECT_MAX_CHARS))),
+            article.words,
+            article.code_words,
+            article.table_rows,
+            article.media,
+        )
+
+    def article(self, url: str) -> list[Element]:
+        """Just the blocks of :meth:`read`."""
+        return list(self.read(url).blocks)
+
+    def html(self, html: str, url: str, title: str = "") -> list[Element]:
+        """Just the blocks of :meth:`read_html`."""
+        return list(self.read_html(html, url, title).blocks)
 
 
 class _Abandoned(ModuleTimeout):

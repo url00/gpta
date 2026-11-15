@@ -81,7 +81,7 @@ next start and forget its saved state.
 | Module | Interval | Limits | Options |
 |---|---|---|---|
 | `affirmations` | 1 day | 500 chars | include date |
-| `hackernews` | 7 days | 5 items, 1500 chars | window days, min score, scan limit, paper estimates |
+| `hackernews` | 7 days | 10 items, 3000 chars | window days, min score, scan limit (60), only text articles, shortest article, paper estimates |
 | `google_tasks` | 5 minutes | 30 tasks per list, 3000 chars | morning time, time zone, list, completed today, credentials file |
 | `google_calendar` | 5 minutes | 30 events, 3000 chars | morning time, time zone, calendar, 12/24-hour, credentials file |
 | `weather` | 5 minutes | 3000 chars | morning time, time zone, latitude, longitude, units, 12/24-hour, alerts |
@@ -91,10 +91,16 @@ next start and forget its saved state.
 - **Hacker News Weekly** scans the current top stories, keeps those inside the
   window, and prints the highest-scoring `max_items`, each beside a QR code.
   Scanning a code prints that article (reader mode of the linked page, or
-  the post's own text). Each row also says roughly how much paper the
-  article would use with the module's current size and layout; turn
-  "Show paper estimates" off to skip the page downloads that needs. Needs
-  `server.public_url`.
+  the post's own text). Needs `server.public_url`.
+  - With "Only text articles" on (the default) it lists only stories that
+    read well on a receipt: at least "Shortest article" words of prose (400),
+    at most one picture plus one per 2,000 words, at most 15% code, few
+    table rows, a page that can be read at all, and no `[video]` or `[pdf]`
+    in the title. It reads candidate pages best score first until enough
+    qualify, for at most a minute; raise "Stories to scan" if the list
+    comes up short. The log says how many were skipped and why.
+  - Each row says roughly how much paper the article would use with the
+    module's current size and layout ("Show paper estimates").
 - **Google Tasks** checks your tasks every 5 minutes. The first check at or
   after the morning time (08:00, server-local unless a time zone is set)
   prints the day's list; after that a new list prints only when something

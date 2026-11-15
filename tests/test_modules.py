@@ -18,6 +18,7 @@ from gpta.module_api import (
     KeyValue,
     ModuleContext,
     QrItem,
+    Reading,
     Rule,
     Skip,
     Text,
@@ -134,32 +135,50 @@ class ModuleTests(unittest.TestCase):
         },
     }
 
+    HN_LONG = (Heading("One"), Rule(heavy=True), *[Text("word " * 60)] * 40)
+
     class HnReader:
-        """Fake ``ctx.reader``: one long page, one that cannot be read."""
+        """Fake ``ctx.reader``: pages by URL; anything else cannot be read."""
 
-        def article(self, url):
-            if "pdf" in url:
+        def __init__(self, pages):
+            self.pages = pages
+            self.read_urls = []
+
+        def read(self, url):
+            self.read_urls.append(url)
+            if url not in self.pages:
                 raise FetchError("not a web page (application/pdf)")
-            return [Heading("One"), Rule(heavy=True), *[Text("word " * 60)] * 40]
+            return self.pages[url]
 
-        def html(self, html, url, title=""):
-            return [Heading(title), Rule(heavy=True), Text(html)]
+        def read_html(self, html, url, title=""):
+            blocks = (Heading(title), Rule(heavy=True), Text(html))
+            return Reading(blocks, words=len(html.split()))
 
-    def hn_ctx(self, tmp, max_items=3, **options):
+    def hn_ctx(self, tmp, stories=None, pages=None, max_items=3, **options):
+        stories = self.HN_STORIES if stories is None else stories
         http = FakeHttp(
             {
-                HN.TOP_STORIES: [1, 2, 3, 4],
-                **{HN.ITEM.format(n): story for n, story in self.HN_STORIES.items()},
+                HN.TOP_STORIES: list(stories),
+                **{HN.ITEM.format(n): story for n, story in stories.items()},
             }
         )
         ctx = make_ctx(
             "hackernews",
             http,
             tmp,
-            limits={"max_items": max_items, "max_chars": 1500},
-            options={"window_days": 7, "min_score": 0, "scan_limit": 4, **options},
+            limits={"max_items": max_items, "max_chars": 3000},
+            options={
+                "window_days": 7,
+                "min_score": 0,
+                "scan_limit": 100,
+                "text_only": False,
+                "min_words": 400,
+                **options,
+            },
         )
-        return replace(ctx, reader=self.HnReader())
+        if pages is None:
+            pages = {"https://www.one.example/post": Reading(self.HN_LONG, 2400)}
+        return replace(ctx, reader=self.HnReader(pages))
 
     def test_hackernews_list_has_codes_and_paper_estimates(self):
         module = self.modules["hackernews"]
@@ -185,9 +204,58 @@ class ModuleTests(unittest.TestCase):
             self.assertEqual([bar.value for bar in chart.bars], [200, 100, 50])
             self.assertEqual(render_image(build_receipt("HN", blocks), 384).width, 384)
 
-            plain = module.fetch(self.hn_ctx(tmp, max_items=1, paper_estimates=False))
+            ctx = self.hn_ctx(tmp, max_items=1, paper_estimates=False)
+            plain = module.fetch(ctx)
             notes = [block.note for block in plain if isinstance(block, QrItem)]
             self.assertEqual(notes, ["200 points · 4 comments · news.ycombinator.com"])
+            self.assertEqual(ctx.reader.read_urls, [])  # nothing downloaded
+
+    def test_hackernews_text_only_lists_what_reads_well_in_print(self):
+        prose = (Heading("T"), Rule(heavy=True), Text("word " * 50))
+        kinds = {
+            "prose": Reading(prose, words=1200, media=1),
+            "long with pictures": Reading(prose, words=5000, media=3),
+            "short": Reading(prose, words=150),
+            "pictures": Reading(prose, words=1200, media=2),
+            "code": Reading(prose, words=1200, code_words=400),
+            "tables": Reading(prose, words=1200, table_rows=30),
+            "talk [video]": Reading(prose, words=1200),
+        }
+        recent = int(NOW.timestamp()) - 3600
+        stories, pages = {}, {}
+        for number, (title, reading) in enumerate(kinds.items(), start=1):
+            url = f"https://site.example/{number}"
+            pages[url] = reading
+            stories[number] = {
+                "id": number,
+                "type": "story",
+                "title": title,
+                "score": 100 - number,
+                "time": recent,
+                "url": url,
+            }
+        stories[8] = {**stories[1], "id": 8, "title": "gone", "url": "https://x/pdf"}
+        module = self.modules["hackernews"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self.hn_ctx(tmp, stories, pages, max_items=10, text_only=True)
+            blocks = module.fetch(ctx)
+            titles = [block.title for block in blocks if isinstance(block, QrItem)]
+            self.assertEqual(titles, ["prose", "long with pictures"])
+
+            # A lower bar for length lets the short one in.
+            ctx = self.hn_ctx(
+                tmp, stories, pages, max_items=10, text_only=True, min_words=100
+            )
+            titles = [b.title for b in module.fetch(ctx) if isinstance(b, QrItem)]
+            self.assertEqual(titles, ["prose", "long with pictures", "short"])
+
+            # Reading stops once enough stories qualify.
+            many = {n: {**stories[1], "id": n, "score": 500 - n} for n in range(1, 41)}
+            ctx = self.hn_ctx(tmp, many, pages, max_items=3, text_only=True)
+            self.assertEqual(
+                len([b for b in module.fetch(ctx) if isinstance(b, QrItem)]), 3
+            )
+            self.assertEqual(len(ctx.reader.read_urls), HN.READ_WORKERS)
 
     def test_hackernews_select_prints_the_article(self):
         module = self.modules["hackernews"]

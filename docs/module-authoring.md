@@ -182,14 +182,23 @@ live code with its scans and last result.
 `ctx.reader` is reader mode for modules, with the same guards as the
 console's web page tab (public http/https sites only, HTML only, 3 MB):
 
-- `ctx.reader.article(url)` downloads a page and returns it as blocks: a
-  header (title, site, address, a QR code to the original), a heavy rule,
-  then the text.
-- `ctx.reader.html(html, url, title="")` does the same for HTML the module
-  already has, such as a post body from an API.
+- `ctx.reader.read(url)` downloads a page and returns a `Reading`. Its
+  `blocks` are the article: a header (title, site, address, a QR code to
+  the original), a heavy rule, then the text.
+- `ctx.reader.read_html(html, url, title="")` does the same for HTML the
+  module already has, such as a post body from an API.
+- `ctx.reader.article(url)` and `ctx.reader.html(...)` return just the
+  blocks.
 
-Both raise `FetchError` when the page cannot be fetched or has no readable
+All raise `FetchError` when the page cannot be fetched or has no readable
 text (a PDF, say).
+
+A `Reading` also says what the page is made of, so a module can tell prose
+from a page that will not survive a receipt printer: `words` (all text),
+`code_words` (the part of it in code listings), `table_rows`, and `media`
+(pictures, videos, embeds and formulas that were left out; icons and page
+furniture are not counted). These are counts, not a verdict; Hacker News
+turns them into one in its `unprintable()`.
 
 `ctx.paper_mm(content)` says roughly how many millimetres of paper blocks
 (or a `Document`) would use if `on_select()` returned them now: it lays them
@@ -199,7 +208,8 @@ News does. It is an estimate: the page, or the settings, may change before
 the scan.
 
 In tests the default context's `reader` raises `FetchError` (there is no
-network); pass a fake with `dataclasses.replace(ctx, reader=...)`.
+network); pass a fake with `dataclasses.replace(ctx, reader=...)` whose
+`read()` returns `Reading(blocks, words=...)`.
 
 ## Markdown
 

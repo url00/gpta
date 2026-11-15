@@ -66,6 +66,7 @@ __all__ = [
     "ModuleStore",
     "QrCode",
     "QrItem",
+    "Reading",
     "Rule",
     "SelectionError",
     "Selections",
@@ -98,14 +99,37 @@ def _memory_store() -> ModuleStore:
     return ModuleStore(Database(None), "test")
 
 
+@dataclass(frozen=True)
+class Reading:
+    """A web page read by ``ctx.reader``: its ``blocks`` (a header, a heavy
+    rule, the text) and what it is made of, for judging how well it prints.
+
+    ``words`` counts the text; ``code_words`` of them are code listings.
+    ``table_rows`` is the rows of tables, and ``media`` the pictures,
+    videos, embeds and formulas that were left out (icons not counted).
+    """
+
+    blocks: tuple[Element, ...]
+    words: int = 0
+    code_words: int = 0
+    table_rows: int = 0
+    media: int = 0
+
+
 class _NoReader:
     """``ctx.reader`` outside the host: there is no network to read from."""
 
-    def article(self, url: str) -> list[Element]:
+    def read(self, url: str) -> Reading:
         raise FetchError("this context has no page reader")
 
-    def html(self, html: str, url: str, title: str = "") -> list[Element]:
+    def read_html(self, html: str, url: str, title: str = "") -> Reading:
         raise FetchError("this context has no page reader")
+
+    def article(self, url: str) -> list[Element]:
+        return list(self.read(url).blocks)
+
+    def html(self, html: str, url: str, title: str = "") -> list[Element]:
+        return list(self.read_html(html, url, title).blocks)
 
 
 def _default_paper_mm(content: Any) -> int:
@@ -142,11 +166,11 @@ class ModuleContext:
     #: Makes QR selection lists (``ctx.selections.offer(...)``). The default
     #: is an in-memory one for tests, with links under ``http://gpta.test``.
     selections: Selections = field(default_factory=_memory_selections)
-    #: Reader mode for web pages: ``ctx.reader.article(url)`` downloads a
-    #: public page and returns it as blocks (a header, a heavy rule, the
-    #: text); ``ctx.reader.html(html, url, title="")`` does the same for
-    #: HTML the module already has. Both raise :class:`FetchError`. The
-    #: default has no network; tests pass a fake.
+    #: Reader mode for web pages: ``ctx.reader.read(url)`` downloads a
+    #: public page and returns a :class:`Reading`; ``read_html(html, url,
+    #: title="")`` does the same for HTML the module already has.
+    #: ``article()`` and ``html()`` return just the blocks. All raise
+    #: :class:`FetchError`. The default has no network; tests pass a fake.
     reader: Any = field(default_factory=_NoReader)
     #: ``ctx.paper_mm(content)``: roughly how many millimetres of paper
     #: ``content`` (blocks or a :class:`Document`) would use if returned
