@@ -2,7 +2,7 @@
 
 Receipts are kept as blocks and rendered on demand, so a paper size change
 applies to existing output too. Images are cached per module, width and
-line spacing.
+margins.
 """
 
 from __future__ import annotations
@@ -15,11 +15,11 @@ from PIL import Image
 
 from .renderer import (
     Receipt,
-    double_spaced,
     render_image,
     render_text,
     render_total,
     render_total_image,
+    wide_margins,
 )
 
 
@@ -57,7 +57,7 @@ class OutputStore:
             if image is None:
                 self._images.pop(module_id, None)
             else:
-                self._images[module_id] = (output, image.width, double_spaced(), image)
+                self._images[module_id] = (output, image.width, wide_margins(), image)
 
     def get(self, module_id: str) -> Output | None:
         with self._lock:
@@ -70,13 +70,13 @@ class OutputStore:
             cached = self._images.get(module_id)
         if output is None:
             return None
-        spaced = double_spaced()
-        if cached and cached[0] is output and cached[1:3] == (width_px, spaced):
+        margins = wide_margins()
+        if cached and cached[0] is output and cached[1:3] == (width_px, margins):
             return cached[3]
         image = render_image(output.receipt, width_px)
         with self._lock:
             if self._latest.get(module_id) is output:
-                self._images[module_id] = (output, width_px, spaced, image)
+                self._images[module_id] = (output, width_px, margins, image)
         return image
 
     def _sections(self, module_ids: Iterable[str]) -> list[tuple[str, Output]]:

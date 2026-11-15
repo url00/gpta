@@ -518,25 +518,38 @@ def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     )
 
 
-# The console's "double space" switch: every line of text takes twice its
-# height, leaving a blank line below it for handwritten notes. Process-wide,
-# because it applies to everything rendered, whatever asked for it.
-_double_spaced = False
+# The console's "margins" switch: blank space down both sides of the paper
+# for handwritten notes. Process-wide, because it applies to everything
+# rendered, whatever asked for it.
+_wide_margins = False
+
+# Half an inch (102 dots at 203 dpi) from each edge of the paper, less the
+# strip the print head cannot reach (80 mm paper prints 72 mm, 58 prints 48).
+WIDE_MARGIN_PX = {576: 70, 384: 62}
 
 
-def set_double_spaced(on: bool) -> None:
-    global _double_spaced
-    _double_spaced = bool(on)
+def set_wide_margins(on: bool) -> None:
+    global _wide_margins
+    _wide_margins = bool(on)
 
 
-def double_spaced() -> bool:
-    return _double_spaced
+def wide_margins() -> bool:
+    return _wide_margins
+
+
+def _side_margin(width_px: int) -> int:
+    """Blank dots added on each side of a ``width_px`` image."""
+    if not _wide_margins:
+        return 0
+    fitting = [width for width in WIDE_MARGIN_PX if width <= width_px]
+    margin = WIDE_MARGIN_PX[max(fitting) if fitting else min(WIDE_MARGIN_PX)]
+    # Never give the notes more than half the paper.
+    return min(margin, width_px // 4)
 
 
 def _line_height(face: ImageFont.FreeTypeFont) -> int:
     ascent, descent = face.getmetrics()
-    height = ascent + descent + max(2, face.size // 8)
-    return height * 2 if _double_spaced else height
+    return ascent + descent + max(2, face.size // 8)
 
 
 def _wrap_px(text: str, face: ImageFont.FreeTypeFont, width: int) -> list[str]:
@@ -1030,24 +1043,38 @@ def render_image(
     if lead is None:
         lead = receipt.lead
     columns = LAYOUT_COLUMNS[receipt.layout if layout is None else layout]
-    if columns > 1:
-        with _RENDER_LOCK:
-            return _render_columns(receipt, int(width_px), scale, lead, columns)
+    paper = int(width_px)
+    side = _side_margin(paper)
+    # Fonts follow the paper, not the narrower strip between the margins.
+    theme = theme_for(paper, scale)
     with _RENDER_LOCK:
-        out = _Layout(int(width_px), scale)
-        theme = out.theme
-        if receipt.title:
-            out.text(receipt.title.upper(), theme.title, bold=True, align="center")
-            out.add(out.gap // 2)
-            out.rule(4)
-            out.add(out.gap)
-        for element in receipt.elements:
-            _layout_element(out, element)
-        if receipt.stamp:
-            out.rule(2)
-            out.add(out.gap // 2)
-            out.text(receipt.stamp, theme.small, align="center")
-        return out.image()
+        image = _render(receipt, paper - 2 * side, theme, lead, columns)
+    if not side:
+        return image
+    page = Image.new("1", (paper, image.height), 1)
+    page.paste(image, (side, 0))
+    return page
+
+
+def _render(
+    receipt: Receipt, width: int, theme: Theme, lead: int, columns: int
+) -> Image.Image:
+    """``receipt`` ``width`` dots wide, set in ``theme``'s sizes."""
+    if columns > 1:
+        return _render_columns(receipt, width, theme, lead, columns)
+    out = _Layout(width, theme=theme)
+    if receipt.title:
+        out.text(receipt.title.upper(), theme.title, bold=True, align="center")
+        out.add(out.gap // 2)
+        out.rule(4)
+        out.add(out.gap)
+    for element in receipt.elements:
+        _layout_element(out, element)
+    if receipt.stamp:
+        out.rule(2)
+        out.add(out.gap // 2)
+        out.text(receipt.stamp, theme.small, align="center")
+    return out.image()
 
 
 def _full_width(element: Any) -> bool:
@@ -1057,10 +1084,9 @@ def _full_width(element: Any) -> bool:
 
 
 def _render_columns(
-    receipt: Receipt, width: int, scale: float, lead: int, columns: int
+    receipt: Receipt, width: int, theme: Theme, lead: int, columns: int
 ) -> Image.Image:
     """Column layout: full-width pieces stacked with column bands."""
-    theme = theme_for(width, scale)
     pieces: list[Image.Image] = []
     full = _Layout(width, theme=theme, pad=False)
     run: list[Element] = []

@@ -337,8 +337,8 @@ class JobStore:
     def set_paused(self, paused: bool) -> None:
         self._set_flag("print_paused", paused)
 
-    def double_spaced(self) -> bool:
-        return self._flag("double_spaced")
+    def wide_margins(self) -> bool:
+        return self._flag("wide_margins")
 
-    def set_double_spaced(self, on: bool) -> None:
-        self._set_flag("double_spaced", on)
+    def set_wide_margins(self, on: bool) -> None:
+        self._set_flag("wide_margins", on)

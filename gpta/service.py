@@ -52,7 +52,7 @@ from .renderer import (
     build_receipt,
     render_image,
     render_text,
-    set_double_spaced,
+    set_wide_margins,
     test_receipt,
     to_png,
     truncate,
@@ -222,7 +222,7 @@ class Service:
             config, self.runner, clock=clock, monotonic=monotonic
         )
         self.printer.on_result = self.runner.note_print
-        set_double_spaced(self.printer.jobs.double_spaced())
+        set_wide_margins(self.printer.jobs.wide_margins())
         self._descriptions = {
             module_id: describe(module) for module_id, module in registry.items()
         }
@@ -515,12 +515,12 @@ class Service:
             self.printer.resume()
         return self.printer.queue()
 
-    def queue_spacing(self, double: bool) -> dict[str, Any]:
-        """Double space everything rendered from now on (kept across
-        restarts). Jobs already queued keep the image they were given."""
-        self.printer.jobs.set_double_spaced(double)
-        set_double_spaced(double)
-        module_log(f"line spacing: {'double' if double else 'single'}")
+    def queue_margins(self, on: bool) -> dict[str, Any]:
+        """Leave note-taking margins on everything rendered from now on
+        (kept across restarts). Jobs already queued keep their image."""
+        self.printer.jobs.set_wide_margins(on)
+        set_wide_margins(on)
+        module_log(f"note margins: {'on' if on else 'off'}")
         return self.printer.queue()
 
     def queue_clear(self) -> dict[str, Any]:

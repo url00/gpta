@@ -881,7 +881,7 @@ function bindReader() {
 
 const queueChip = document.getElementById("queue-chip");
 const queuePause = document.getElementById("queue-pause");
-const queueSpacing = document.getElementById("queue-spacing");
+const queueMargins = document.getElementById("queue-margins");
 const SOURCE_NAMES = { instant: "Instant print", reader: "Web page", test: "Test page" };
 let queueView = "";      // what the queue lists currently show
 
@@ -972,9 +972,9 @@ function updateQueue() {
   queueChip.classList.toggle("error", Boolean(queue.paused || queue.blocked));
   queuePause.textContent = queue.paused ? "Resume printing" : "Pause printing";
   queuePause.classList.toggle("paused", queue.paused);
-  queueSpacing.textContent = `Double space: ${queue.double_spaced ? "on" : "off"}`;
-  queueSpacing.classList.toggle("on", Boolean(queue.double_spaced));
-  queueSpacing.setAttribute("aria-pressed", String(Boolean(queue.double_spaced)));
+  queueMargins.textContent = `Margins: ${queue.wide_margins ? "on" : "off"}`;
+  queueMargins.classList.toggle("on", Boolean(queue.wide_margins));
+  queueMargins.setAttribute("aria-pressed", String(Boolean(queue.wide_margins)));
   document.getElementById("tab-queue").textContent = pending ? `Queue (${pending})` : "Queue";
 
   document.getElementById("queue-blocked").textContent = queue.blocked
@@ -1003,8 +1003,8 @@ function bindQueue() {
   queuePause.addEventListener("click", () => {
     busy(queuePause, () => queuePost(queue && queue.paused ? "resume" : "pause"));
   });
-  queueSpacing.addEventListener("click", () => {
-    busy(queueSpacing, () => queuePost(queue && queue.double_spaced ? "single" : "double"));
+  queueMargins.addEventListener("click", () => {
+    busy(queueMargins, () => queuePost(queue && queue.wide_margins ? "no-margins" : "margins"));
   });
   const clear = document.getElementById("queue-clear");
   clear.addEventListener("click", () => {

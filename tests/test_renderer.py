@@ -2,6 +2,8 @@ import json
 import unittest
 from datetime import UTC, datetime
 
+from PIL import ImageOps
+
 from gpta.blocks import (
     Bar,
     BarChart,
@@ -25,7 +27,7 @@ from gpta.renderer import (
     render_text,
     render_total,
     render_total_image,
-    set_double_spaced,
+    set_wide_margins,
     test_receipt,
     to_png,
     truncate,
@@ -355,33 +357,38 @@ class PlainTextTests(unittest.TestCase):
         self.assertEqual(render_total([], 10), ["No output from enabled modules."])
 
 
-class DoubleSpacingTests(unittest.TestCase):
+class WideMarginTests(unittest.TestCase):
     def tearDown(self):
-        set_double_spaced(False)
+        set_wide_margins(False)
 
-    def test_double_spacing_doubles_text_lines(self):
-        receipt = Receipt("", (Text("one\ntwo\nthree\nfour\nfive\nsix"),))
-        single = render_image(receipt, 576)
-        set_double_spaced(True)
-        double = render_image(receipt, 576)
-        columns = render_image(receipt, 576, layout="double")
-        set_double_spaced(False)
-        self.assertGreater(double.height, single.height * 1.6)
-        self.assertLess(double.height, single.height * 2)
-        self.assertGreater(columns.height, 1)
-        self.assertEqual(render_image(receipt, 576).height, single.height)
+    def test_margins_stay_blank(self):
+        text = "A paragraph long enough to wrap over several lines of paper. " * 4
+        receipt = Receipt("Title", (Text(text), Rule(), QrCode("https://x.test")))
+        plain = render_image(receipt, 576)
+        set_wide_margins(True)
+        for width, margin in ((576, 70), (384, 62)):
+            for layout in ("single", "double"):
+                image = render_image(receipt, width, layout=layout)
+                self.assertEqual(image.width, width)
+                box = ImageOps.invert(image.convert("L")).getbbox()
+                self.assertGreaterEqual(box[0], margin)
+                self.assertLessEqual(box[2], width - margin)
+        # Same font size in less width: the text wraps sooner.
+        self.assertGreater(render_image(receipt, 576).height, plain.height)
+        set_wide_margins(False)
+        self.assertEqual(render_image(receipt, 576).height, plain.height)
 
-    def test_output_cache_follows_spacing(self):
+    def test_output_cache_follows_margins(self):
         from gpta.outputs import OutputStore
 
         store = OutputStore()
-        receipt = Receipt("", (Text("one\ntwo\nthree"),))
+        receipt = Receipt("", (Text("word " * 60),))
         store.set("m", receipt, "now", image=render_image(receipt, 576))
-        single = store.image("m", 576)
-        set_double_spaced(True)
-        double = store.image("m", 576)
-        self.assertGreater(double.height, single.height)
-        self.assertIs(store.image("m", 576), double)
+        plain = store.image("m", 576)
+        set_wide_margins(True)
+        wide = store.image("m", 576)
+        self.assertGreater(wide.height, plain.height)
+        self.assertIs(store.image("m", 576), wide)
 
 
 if __name__ == "__main__":
