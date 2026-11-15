@@ -2,9 +2,10 @@ import json
 import sys
 import tempfile
 import unittest
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 
 from gpta import DEFAULT_MODULES_DIR
 from gpta.blocks import text_of
@@ -24,6 +25,7 @@ from gpta.module_api import (
     Rule,
     Skip,
     Text,
+    fingerprint,
 )
 from gpta.registry import discover
 from gpta.renderer import build_receipt, render_image, render_text
@@ -526,6 +528,41 @@ class ModuleTests(unittest.TestCase):
             )
             with self.assertRaises(Skip):
                 module.fetch(at(8, 5, day=19))
+
+    def test_fingerprint_ignores_fields_left_at_their_defaults(self):
+        @dataclass(frozen=True)
+        class Newer:  # Text after a release adds an optional field
+            kind: ClassVar[str] = "text"
+            text: str
+            size: str = "body"
+            added_later: int = 0
+
+        blocks = [Heading("Tasks"), Checkbox("Soon", value="Oct 20")]
+        self.assertEqual(fingerprint(blocks), fingerprint(list(blocks)))
+        self.assertNotEqual(fingerprint(blocks), fingerprint(blocks[:1]))
+        self.assertNotEqual(
+            fingerprint([Checkbox("Soon")]), fingerprint([Checkbox("Soon", True)])
+        )
+        self.assertEqual(fingerprint([Newer("a")]), fingerprint([Text("a")]))
+        self.assertNotEqual(
+            fingerprint([Newer("a", added_later=1)]), fingerprint([Text("a")])
+        )
+
+    def test_google_tasks_does_not_reprint_after_an_upgrade(self):
+        module = self.modules["google_tasks"]
+        code = sys.modules[type(module).__module__]
+        http = self.gt_http(self.GT_PENDING)
+        with tempfile.TemporaryDirectory() as tmp:
+            first = self.gt_ctx(tmp, http)
+            store = first.store
+            blocks = module.fetch(first)
+            # 0.10.0 and earlier saved a hash that covered every block field.
+            store.set("fingerprint", code._old_fingerprint(blocks))
+            with self.assertRaisesRegex(Skip, "no task changes"):
+                module.fetch(self.gt_ctx(tmp, http, store=store))
+            self.assertEqual(store.get("fingerprint"), fingerprint(blocks))
+            store.set("fingerprint", "something else")
+            self.assertTrue(module.fetch(self.gt_ctx(tmp, http, store=store)))
 
     def test_google_tasks_named_list_and_time_zone(self):
         module = self.modules["google_tasks"]

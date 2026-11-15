@@ -39,6 +39,7 @@ from .blocks import (
     QrItem,
     Rule,
     Text,
+    fingerprint,
 )
 from .cache import Cache
 from .markdown import to_blocks as markdown_blocks
@@ -73,6 +74,7 @@ __all__ = [
     "Skip",
     "StoreError",
     "Text",
+    "fingerprint",
     "limits_schema",
     "markdown_blocks",
 ]

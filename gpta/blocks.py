@@ -9,9 +9,10 @@ added by defining a dataclass with a ``kind`` and registering it in
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
-from dataclasses import dataclass, field, fields
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from typing import Any, ClassVar
 
 ALIGNS = ("left", "center", "right")
@@ -394,6 +395,39 @@ def to_dict(element: Element) -> dict[str, Any]:
             continue  # as blocks were saved before they could be indented
         data[item.name] = value
     return data
+
+
+def _set_fields(value: Any) -> Any:
+    """``value``'s fields that differ from their defaults, for hashing."""
+    if not is_dataclass(value) or isinstance(value, type):
+        return str(value)
+    data: dict[str, Any] = {"": getattr(value, "kind", type(value).__name__)}
+    for item in fields(value):
+        current = getattr(value, item.name)
+        if item.default is not MISSING:
+            default = item.default
+        elif item.default_factory is not MISSING:
+            default = item.default_factory()
+        else:
+            default = MISSING
+        if default is MISSING or current != default:
+            data[item.name] = current
+    return data
+
+
+def fingerprint(elements: Any) -> str:
+    """A hash of ``elements`` for telling whether content has changed.
+
+    Only fields set to something other than their default count, so the
+    hash of the same content stays the same when a later version gives a
+    block kind a new optional field.
+    """
+    raw = json.dumps(
+        [_set_fields(element) for element in elements],
+        default=_set_fields,
+        sort_keys=True,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def from_dict(data: Any) -> Element:

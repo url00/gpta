@@ -313,6 +313,12 @@ def fetch(self, ctx):
     return self._blocks(items)
 ```
 
+To compare what would print rather than the source data, save
+`fingerprint(blocks)`: a hash of the blocks that stays the same across GPTA
+releases, since fields left at their defaults do not count. Do not hash
+`dataclasses.astuple()` or `repr()` of a block; those change whenever a
+release adds a field, and every list would print again after an upgrade.
+
 A skipped run is a successful one: `ctx.store` writes are saved, the
 previous receipt stays in the console, nothing is queued for the printer,
 and the message is logged. Print anyway when `ctx.trigger` is `"manual"`, so

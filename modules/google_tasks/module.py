@@ -30,6 +30,7 @@ from gpta.module_api import (
     ModuleContext,
     Skip,
     Text,
+    fingerprint,
 )
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -218,7 +219,10 @@ def _morning(ctx: ModuleContext) -> time:
     return time(int(match.group(1)), int(match.group(2)))
 
 
-def _fingerprint(blocks: list[Element]) -> str:
+def _old_fingerprint(blocks: list[Element]) -> str:
+    """The hash saved by 0.10.0 and earlier. It covered every field of a
+    block, so it changed whenever a release added one; still recognised so
+    that upgrading does not reprint an unchanged list."""
     raw = json.dumps([[type(b).__name__, *astuple(b)] for b in blocks], default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -303,16 +307,17 @@ class GoogleTasksModule(Module):
         if not blocks:
             blocks = [Heading("Tasks"), Text("No task lists found.")]
 
-        fingerprint = _fingerprint(blocks)
+        printed = fingerprint(blocks)
         first_today = ctx.store.get("printed_day") != today.isoformat()
         if (
             not manual
             and not first_today
-            and ctx.store.get("fingerprint") == fingerprint
+            and ctx.store.get("fingerprint") in (printed, _old_fingerprint(blocks))
         ):
+            ctx.store.set("fingerprint", printed)
             raise Skip("no task changes")
         if local.time() >= morning:  # an early manual run is not the morning list
             ctx.store.set("printed_day", today.isoformat())
-        ctx.store.set("fingerprint", fingerprint)
+        ctx.store.set("fingerprint", printed)
         ctx.emit("morning list" if first_today else "tasks changed; printing new list")
         return blocks
