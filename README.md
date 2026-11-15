@@ -81,17 +81,56 @@ next start and forget its saved state.
 |---|---|---|---|
 | `affirmations` | 1 day | 500 chars | include date |
 | `hackernews` | 7 days | 5 items, 1500 chars | window days, min score, scan limit |
-| `google_tasks` | 1 hour | 15 items, 2000 chars | credentials file, list id, completed |
+| `google_tasks` | 5 minutes | 30 tasks per list, 3000 chars | morning time, time zone, list, completed today, credentials file |
 
 - **Daily Affirmation** picks one line per day from
   `modules/affirmations/data/affirmations.txt`; edit that file to customise.
 - **Hacker News Weekly** scans the current top stories, keeps those inside the
   window, and prints the highest-scoring `max_items`.
-- **Google Tasks** prints pending tasks from one list. One-time setup: enable
-  the Tasks API in Google Cloud, create a **Desktop app** OAuth client, then
-  run `GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... python3 scripts/google_oauth.py`.
-  It writes `data/google_credentials.json` (mode 0600), which the HTTP API
-  never exposes.
+- **Google Tasks** checks your tasks every 5 minutes. The first check at or
+  after the morning time (08:00, server-local unless a time zone is set)
+  prints the day's list; after that a new list prints only when something
+  changed (a task added, edited or ticked off). Tasks completed today print
+  as ticked boxes. Nothing is fetched before the morning time, and **Run**
+  always prints. Setup is below.
+
+### Google Tasks setup
+
+A personal Google account can only be reached through OAuth with your own
+consent (service accounts cannot see a personal account's tasks, and Google's
+TV/device sign-in does not allow the Tasks scope). GPTA uses a **Desktop app**
+OAuth client and stores a refresh token, read-only (`tasks.readonly`).
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), create a
+   project (any name).
+2. **APIs & Services → Library**: find **Google Tasks API** and enable it.
+3. **Google Auth Platform → Branding**: fill in an app name and your email.
+   If it asks for a privacy policy, GPTA serves one at `/privacy` (edit
+   `web/privacy.html` to taste); the address must be reachable publicly.
+   **Audience**: choose **External**, then **Publish app** so the status is
+   **In production**. This matters: while the app is in *Testing*, Google
+   expires the sign-in every 7 days. No verification is needed for your own
+   use.
+4. **Google Auth Platform → Clients → Create client**: type **Desktop app**.
+   Download its JSON file.
+5. On the GPTA machine, run:
+
+   ```bash
+   python3 scripts/google_oauth.py --client-file ~/Downloads/client_secret_XXXX.json
+   ```
+
+   Open the link, pick your account, and at "Google hasn't verified this app"
+   choose **Advanced → Go to (app name)**. If the GPTA machine has no browser,
+   add `--paste`: open the link on another device and paste back the
+   `http://127.0.0.1:8765/?...` address the browser ends on (the page itself
+   fails to load; that is expected).
+6. The script writes `data/google_credentials.json` (mode 0600, never exposed
+   by the HTTP API) and lists your task lists. Enable the module in the
+   console and press **Run** for a first print.
+
+If the module later reports that Google rejected the saved sign-in, run the
+script again. That happens if you revoke access, or after 6 months without
+use.
 
 To write a module, see [docs/module-authoring.md](docs/module-authoring.md).
 

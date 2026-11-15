@@ -8,7 +8,7 @@ from unittest.mock import patch
 from gpta.config import ConfigStore
 from gpta.errors import AlreadyRunning
 from gpta.logbus import LogBus
-from gpta.module_api import Block, FetchError, Module
+from gpta.module_api import Block, FetchError, Module, Skip
 from gpta.printing import PrinterError
 from gpta.service import Service
 
@@ -56,6 +56,20 @@ class FlakyModule(FakeModule):
         return super().fetch(ctx)
 
 
+class SkippingModule(FakeModule):
+    """Prints on manual runs and on its first scheduled run only."""
+
+    id = "skipping"
+    name = "Skipping"
+
+    def fetch(self, ctx):
+        runs = ctx.store.get("runs", 0) + 1
+        ctx.store.set("runs", runs)
+        if ctx.trigger != "manual" and runs > 1:
+            raise Skip("nothing new")
+        return [Block("SKIP BODY", (f"run {runs}",))]
+
+
 class SlowModule(FakeModule):
     id = "slow"
     name = "Slow"
@@ -75,6 +89,7 @@ class ServiceTests(unittest.TestCase):
             "fake": FakeModule(),
             "failing": FailingModule(),
             "flaky": FlakyModule(),
+            "skipping": SkippingModule(),
             "slow": SlowModule(),
         }
         self.store = ConfigStore(Path(self.tmp.name) / "config.json", self.registry)
@@ -106,6 +121,23 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(
             self.service.output_text("total"), "No output from enabled modules.\n"
         )
+
+    def test_skip_keeps_receipt_and_saves_state(self):
+        runner = self.service.runner
+        first = runner.run("skipping", "schedule")
+        self.assertTrue(first["ok"])
+        self.assertFalse(first["skipped"])
+        second = runner.run("skipping", "schedule")
+        self.assertTrue(second["ok"])
+        self.assertTrue(second["skipped"])
+        self.assertFalse(second["queued"])
+        self.assertEqual(second["runtime"]["consecutive_failures"], 0)
+        self.assertEqual(second["runtime"]["run_count"], 2)
+        # The earlier receipt is still shown, and the skipped run's writes stuck.
+        self.assertIn("run 1", self.service.output_text("skipping"))
+        manual = self.service.run_module("skipping")
+        self.assertFalse(manual["skipped"])
+        self.assertIn("run 3", manual["module"]["output"]["text"])
 
     def test_tick_respects_enabled(self):
         self.service.tick()

@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
-"""One-time Google OAuth helper for the Google Tasks module."""
+"""One-time Google sign-in for the Google Tasks module.
+
+Runs the OAuth flow for a "Desktop app" client (loopback redirect + PKCE)
+and writes a refresh token to data/google_credentials.json.
+
+    python3 scripts/google_oauth.py --client-file ~/Downloads/client_secret_*.json
+
+On a machine without a browser, add --paste: open the printed link on any
+other device, approve, and paste back the address the browser ends up on
+(it will fail to load; that is expected).
+"""
 
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import secrets
@@ -22,58 +34,83 @@ from gpta.http import FetchError, HttpClient  # noqa: E402
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-SCOPE = "https://www.googleapis.com/auth/tasks"
+LISTS_URL = "https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=100"
+SCOPE = "https://www.googleapis.com/auth/tasks.readonly"
+PASTE_PORT = 8765  # nothing listens here in --paste mode
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--client-file",
+        help="the OAuth client JSON downloaded from Google Cloud",
+    )
     parser.add_argument("--client-id", default=os.environ.get("GOOGLE_CLIENT_ID"))
     parser.add_argument(
         "--client-secret", default=os.environ.get("GOOGLE_CLIENT_SECRET")
     )
     parser.add_argument("--data-dir", default=os.environ.get("GPTA_DATA_DIR"))
+    parser.add_argument(
+        "--paste",
+        action="store_true",
+        help="paste the redirect address by hand (no browser on this machine)",
+    )
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--timeout", type=int, default=300)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def read_client(args: argparse.Namespace) -> tuple[str, str]:
+    """The client id and secret, from --client-file or the flags."""
+    if args.client_file:
+        data = json.loads(Path(args.client_file).expanduser().read_text("utf-8"))
+        if "installed" not in data:
+            raise ValueError(
+                "not a Desktop-app client file (no 'installed' section); "
+                "create an OAuth client of type 'Desktop app'"
+            )
+        return data["installed"]["client_id"], data["installed"]["client_secret"]
     if not args.client_id or not args.client_secret:
-        print(
-            "client id and secret required (--client-id/--client-secret or "
-            "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET)",
-            file=sys.stderr,
+        raise ValueError(
+            "pass --client-file, or --client-id and --client-secret "
+            "(GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)"
         )
-        return 2
+    return args.client_id, args.client_secret
 
-    data_dir = (
-        Path(args.data_dir or os.environ.get("GPTA_DATA_DIR") or (Path.cwd() / "data"))
-        .expanduser()
-        .resolve()
-    )
-    data_dir.mkdir(parents=True, exist_ok=True)
-    creds_path = data_dir / "google_credentials.json"
 
-    state = secrets.token_urlsafe(24)
+def parse_redirect(url: str, state: str) -> str:
+    """The authorization code in a redirect address; raises ValueError."""
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url.strip()).query)
+    if "error" in query:
+        raise ValueError(f"Google returned: {query['error'][0]}")
+    if query.get("state", [""])[0] != state:
+        raise ValueError("state mismatch (use the link from this run)")
+    if not query.get("code"):
+        raise ValueError("no authorization code in that address")
+    return query["code"][0]
+
+
+def listen_for_redirect(httpd: HTTPServer, state: str, timeout: int) -> str:
     captured: dict[str, str] = {}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - http.server API
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            if "error" in query:
-                captured["error"] = query["error"][0]
-            elif query.get("state", [""])[0] != state:
-                captured["error"] = "state mismatch"
-            elif "code" in query:
-                captured["code"] = query["code"][0]
-            else:
-                captured["error"] = "missing authorization code"
+            if urllib.parse.urlsplit(self.path).path != "/":
+                self.send_error(404)  # e.g. /favicon.ico
+                return
+            try:
+                captured["code"] = parse_redirect(self.path, state)
+                message = "Google authorization received"
+            except ValueError as exc:
+                captured["error"] = str(exc)
+                message = "Authorization failed"
             body = (
-                b"<html><body><h2>Google authorization received</h2>"
-                b"<p>You can close this window and return to the terminal.</p>"
-                b"</body></html>"
-            )
+                f"<html><body><h2>{message}</h2>"
+                "<p>You can close this window and return to the terminal.</p>"
+                "</body></html>"
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -83,51 +120,94 @@ def main(argv: list[str] | None = None) -> int:
         def log_message(self, fmt: str, *args) -> None:
             pass
 
-    httpd = HTTPServer(("127.0.0.1", 0), Handler)
+    httpd.RequestHandlerClass = Handler
     httpd.timeout = 1
-    port = httpd.server_address[1]
-    redirect_uri = f"http://127.0.0.1:{port}/"
-    params = {
-        "client_id": args.client_id,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": SCOPE,
-        "access_type": "offline",
-        "prompt": "consent",
-        "state": state,
-    }
-    auth_url = AUTH_URL + "?" + urllib.parse.urlencode(params)
-    print("Open this URL and approve access:")
-    print(auth_url)
-    if not args.no_browser:
-        try:
-            webbrowser.open(auth_url)
-        except Exception:
-            pass
-
-    deadline = time.monotonic() + args.timeout
-    while (
-        time.monotonic() < deadline
-        and "code" not in captured
-        and "error" not in captured
-    ):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not captured:
         httpd.handle_request()
-    httpd.server_close()
-
     if "error" in captured:
-        print(f"authorization failed: {captured['error']}", file=sys.stderr)
-        return 1
+        raise ValueError(captured["error"])
     if "code" not in captured:
-        print("timed out waiting for authorization", file=sys.stderr)
-        return 1
+        raise ValueError("timed out waiting for authorization")
+    return captured["code"]
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        client_id, client_secret = read_client(args)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"cannot read the OAuth client: {exc}", file=sys.stderr)
+        return 2
+
+    data_dir = Path(args.data_dir or (ROOT / "data")).expanduser().resolve()
+    creds_path = data_dir / "google_credentials.json"
+
+    httpd = None
+    port = PASTE_PORT
+    if not args.paste:
+        httpd = HTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+        port = httpd.server_address[1]
+    redirect_uri = f"http://127.0.0.1:{port}/"
+
+    state = secrets.token_urlsafe(24)
+    verifier = secrets.token_urlsafe(64)
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    auth_url = (
+        AUTH_URL
+        + "?"
+        + urllib.parse.urlencode(
+            {
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "response_type": "code",
+                "scope": SCOPE,
+                "access_type": "offline",  # ask for a refresh token
+                "prompt": "consent",  # ...even if access was granted before
+                "state": state,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+            }
+        )
+    )
+    print("Open this link and approve access:\n")
+    print(auth_url + "\n")
 
     try:
-        token = HttpClient(timeout=30).post_form_json(
+        if httpd is None:
+            print(
+                "After approving, the browser goes to an address starting with\n"
+                f"{redirect_uri} that will not load. Copy that whole address "
+                "and paste it here."
+            )
+            code = parse_redirect(input("Address: "), state)
+        else:
+            if not args.no_browser:
+                try:
+                    webbrowser.open(auth_url)
+                except Exception:
+                    pass
+            code = listen_for_redirect(httpd, state, args.timeout)
+    except (ValueError, EOFError, KeyboardInterrupt) as exc:
+        print(f"authorization failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if httpd is not None:
+            httpd.server_close()
+
+    http = HttpClient(timeout=30)
+    try:
+        token = http.post_form_json(
             TOKEN_URL,
             {
-                "code": captured["code"],
-                "client_id": args.client_id,
-                "client_secret": args.client_secret,
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code_verifier": verifier,
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
             },
@@ -137,15 +217,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     refresh_token = token.get("refresh_token") if isinstance(token, dict) else None
     if not refresh_token:
-        print(
-            "no refresh token returned; remove prior app access and retry",
-            file=sys.stderr,
-        )
+        print("Google returned no refresh token; try again", file=sys.stderr)
         return 1
 
+    data_dir.mkdir(parents=True, exist_ok=True)
     payload = {
-        "client_id": args.client_id,
-        "client_secret": args.client_secret,
+        "client_id": client_id,
+        "client_secret": client_secret,
         "refresh_token": refresh_token,
         "scope": SCOPE,
     }
@@ -155,6 +233,21 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(payload, handle, indent=2)
         handle.write("\n")
     print(f"wrote credentials to {creds_path}")
+
+    # Prove the token works, and show the list names the module can use.
+    try:
+        lists = http.get_json(
+            LISTS_URL, headers={"Authorization": f"Bearer {token['access_token']}"}
+        )
+    except (FetchError, KeyError) as exc:
+        print(
+            f"but reading your task lists failed: {exc}\n"
+            "Check that the Google Tasks API is enabled for the project.",
+            file=sys.stderr,
+        )
+        return 1
+    titles = [str(item.get("title")) for item in lists.get("items", [])]
+    print("task lists: " + (", ".join(titles) or "(none)"))
     return 0
 
 

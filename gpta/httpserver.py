@@ -53,6 +53,7 @@ ROUTES: list[tuple[str, re.Pattern[str], str]] = [
     (method, re.compile(pattern), name)
     for method, pattern, name in (
         ("GET", r"/", "index"),
+        ("GET", r"/privacy", "privacy"),
         ("GET", r"/favicon\.ico", "favicon"),
         ("GET", r"/static/(?P<rel>.+)", "static"),
         ("GET", r"/api/state", "state"),
@@ -153,6 +154,10 @@ class Handler(BaseHTTPRequestHandler):
     # -- handlers (one per entry in ROUTES) ----------------------------
     def _h_index(self) -> None:
         self._serve_static("index.html")
+
+    def _h_privacy(self) -> None:
+        # Google's OAuth branding form asks for a privacy policy address.
+        self._serve_static("privacy.html")
 
     def _h_favicon(self) -> None:
         self._send_headers(204, "text/plain; charset=utf-8", 0)

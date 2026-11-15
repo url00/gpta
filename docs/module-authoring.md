@@ -190,10 +190,34 @@ so existing modules won't change.
 | `store` | The module's saved state: `get(key, default=None)`, `set(key, value)`, `delete(key)`, `keys(prefix="")`, `items(prefix="")`, `key in store` |
 | `emit(message, level)` | Log to the console; level `debug`, `info`, `warning`, `error` |
 | `data_dir` | The data directory (for credentials files; prefer `cache` for downloads) |
+| `trigger` | What started the run: `"schedule"` or `"manual"` (the Run button or the API) |
 
 Raise `gpta.module_api.FetchError` when source data is unavailable.
 `gpta.http.FetchError` subclasses it, so `except FetchError` covers both your
 errors and network failures. Any exception fails the run and triggers backoff.
+
+## Skipping a run
+
+A module that polls for changes can end a run without printing by raising
+`Skip`:
+
+```python
+from gpta.module_api import Skip
+
+
+def fetch(self, ctx):
+    items = self._items(ctx)
+    if ctx.trigger != "manual" and items == ctx.store.get("printed"):
+        raise Skip("no changes")
+    ctx.store.set("printed", items)
+    return self._blocks(items)
+```
+
+A skipped run is a successful one: `ctx.store` writes are saved, the
+previous receipt stays in the console, nothing is queued for the printer,
+and the message is logged. Print anyway when `ctx.trigger` is `"manual"`, so
+the Run button always produces a receipt. Returning an empty list is not a
+skip; it prints "No content".
 
 ## Saved state
 

@@ -175,7 +175,7 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(state["printer"]["enabled"])
         self.assertNotIn("logs", state)
         self.assertEqual(state["registry_errors"], [])
-        for path in ("/", "/static/app.js", "/static/style.css"):
+        for path in ("/", "/privacy", "/static/app.js", "/static/style.css"):
             status, _, _ = self.request("GET", path)
             self.assertEqual(status, 200, path)
 

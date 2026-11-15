@@ -62,6 +62,7 @@ __all__ = [
     "ModuleStore",
     "QrCode",
     "Rule",
+    "Skip",
     "StoreError",
     "Text",
     "limits_schema",
@@ -74,6 +75,15 @@ class FetchError(Exception):
 
     ``gpta.http.FetchError`` subclasses this, so ``except FetchError`` in a
     module catches both its own errors and failures raised by ``ctx.http``.
+    """
+
+
+class Skip(Exception):  # noqa: N818 - control flow, not an error
+    """Raised by ``fetch()`` when there is nothing new to print.
+
+    The run counts as successful: the module's ``ctx.store`` writes are
+    saved, the previous receipt stays in the console, and nothing is queued
+    for the printer. The message is logged as the reason.
     """
 
 
@@ -96,6 +106,10 @@ class ModuleContext:
     #: The module's saved state. The host always passes one; the default is
     #: an empty in-memory store, so tests can build a context without it.
     store: ModuleStore = field(default_factory=_memory_store)
+    #: What started the run: ``"schedule"`` or ``"manual"`` (the Run button
+    #: or the API). A module that skips unchanged runs should still print
+    #: when asked by hand.
+    trigger: str = "schedule"
 
     def emit(self, message: str, level: str = "info") -> None:
         self.log(message, level)

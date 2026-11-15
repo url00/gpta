@@ -15,7 +15,7 @@ from .blocks import Block, Document
 from .cache import Cache
 from .config import PAPERS, ConfigStore
 from .errors import AlreadyRunning, ModuleStuck, ModuleTimeout, NotFound
-from .module_api import Module, ModuleContext
+from .module_api import Module, ModuleContext, Skip
 from .outputs import OutputStore
 from .printing import (
     AutoPrintOff,
@@ -198,6 +198,7 @@ class ModuleRunner:
         module_id = module.id
         started = self.monotonic()
         error: str | None = None
+        skipped = False
         job: dict[str, Any] | None = None
         module_log(f"run started ({trigger})", "info", module_id)
         store = ModuleStore(self.db, module_id)
@@ -214,6 +215,7 @@ class ModuleRunner:
                 cache=self.cache,
                 log=self._make_emitter(module_id),
                 store=store,
+                trigger=trigger,
             )
             content = self._fetch_with_timeout(module, ctx)
             if not content or (isinstance(content, Document) and not content.elements):
@@ -240,16 +242,23 @@ class ModuleRunner:
                 runtime.consecutive_failures = 0
             module_log(f"fetched {len(receipt.elements)} block(s)", "info", module_id)
             job = self._auto_print(module_id, image, manual=trigger == "manual")
+        except Skip as exc:
+            # Nothing new: a successful run that keeps the previous receipt.
+            try:
+                store.commit()
+            except Exception as commit_exc:
+                error = self._fail(module_id, commit_exc)
+            else:
+                skipped = True
+                with self._lock:
+                    runtime = self._runtime[module_id]
+                    runtime.last_ok = True
+                    runtime.last_error = None
+                    runtime.print_skipped = None
+                    runtime.consecutive_failures = 0
+                module_log(f"skipped: {str(exc) or 'nothing new'}", "info", module_id)
         except Exception as exc:
-            error = str(exc)
-            module_log(f"run failed: {error}", "error", module_id)
-            with self._lock:
-                runtime = self._runtime[module_id]
-                runtime.last_ok = False
-                runtime.last_error = error
-                runtime.print_error = None
-                runtime.print_skipped = None
-                runtime.consecutive_failures += 1
+            error = self._fail(module_id, exc)
         finally:
             store.discard()  # no-op after a commit; drops a failed run's writes
             with self._lock:
@@ -266,6 +275,7 @@ class ModuleRunner:
         self._persist(module_id)
         result: dict[str, Any] = {
             "ok": error is None,
+            "skipped": skipped,
             "queued": job is not None,
             "job": job,
         }
@@ -275,6 +285,19 @@ class ModuleRunner:
             result["error"] = error
         result["runtime"] = self.runtime_snapshot(module_id)
         return result
+
+    def _fail(self, module_id: str, exc: Exception) -> str:
+        """Record a failed run and return its error message."""
+        error = str(exc)
+        module_log(f"run failed: {error}", "error", module_id)
+        with self._lock:
+            runtime = self._runtime[module_id]
+            runtime.last_ok = False
+            runtime.last_error = error
+            runtime.print_error = None
+            runtime.print_skipped = None
+            runtime.consecutive_failures += 1
+        return error
 
     def _auto_print(
         self, module_id: str, image: Image.Image, *, manual: bool

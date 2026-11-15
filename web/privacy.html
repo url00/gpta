@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GPTA - Privacy Policy</title>
+  <!-- Self-contained: this page may be the only public path on the site. -->
+  <style>
+    body { margin: 0; background: #fff; color: #000; font: 14px/1.5 ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace; }
+    main { max-width: 42rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+    h1 { font-size: 20px; }
+    h2 { font-size: 14px; margin-top: 1.5rem; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>GPTA Privacy Policy</h1>
+    <p>
+      GPTA is a personal, self-hosted program that prints short receipts on a
+      thermal printer. This instance is run by one person for their own use.
+      It is not a public service and has no user accounts.
+    </p>
+
+    <h2>Google data GPTA accesses</h2>
+    <p>
+      If its owner signs in with Google, GPTA reads that account's Google
+      Tasks (task lists and tasks: titles, notes, due dates and completion
+      status) using the read-only scope
+      <code>https://www.googleapis.com/auth/tasks.readonly</code>. It cannot
+      create, change or delete tasks, and it requests no other Google data.
+    </p>
+
+    <h2>How the data is used</h2>
+    <p>
+      Tasks are fetched to print a task list on the owner's printer and to
+      show the same list in the owner's GPTA console. That is the only use.
+    </p>
+
+    <h2>Storage</h2>
+    <p>
+      Everything is stored on the owner's own machine: the OAuth client
+      details and refresh token that keep the sign-in working, the most
+      recent task list, and a fingerprint of it used to detect changes.
+      Each new list replaces the previous one.
+    </p>
+
+    <h2>Sharing</h2>
+    <p>
+      Google data is not shared with, sold to, or transferred to anyone. It
+      is not used for advertising, analytics, or training AI models. It
+      leaves the machine only as requests to Google's own APIs.
+    </p>
+
+    <h2>Removing access</h2>
+    <p>
+      Access can be revoked at any time at
+      <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+      Deleting GPTA's data directory removes the stored sign-in and task
+      data.
+    </p>
+
+    <h2>Contact</h2>
+    <p>Questions go to the operator of this GPTA instance.</p>
+  </main>
+</body>
+</html>
