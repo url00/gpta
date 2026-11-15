@@ -170,7 +170,7 @@ class ApiTests(unittest.TestCase):
         state = json.loads(body)
         self.assertEqual(
             [m["id"] for m in state["modules"]],
-            ["affirmations", "google_tasks", "hackernews"],
+            ["affirmations", "google_calendar", "google_tasks", "hackernews"],
         )
         self.assertFalse(state["printer"]["enabled"])
         self.assertNotIn("logs", state)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time Google sign-in for the Google Tasks module.
+"""One-time Google sign-in for the Google Tasks and Google Calendar modules.
 
 Runs the OAuth flow for a "Desktop app" client (loopback redirect + PKCE)
 and writes a refresh token to data/google_credentials.json.
@@ -35,7 +35,12 @@ from gpta.http import FetchError, HttpClient  # noqa: E402
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 LISTS_URL = "https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=100"
-SCOPE = "https://www.googleapis.com/auth/tasks.readonly"
+# Read-only access for both modules, granted in one sign-in.
+SCOPE = (
+    "https://www.googleapis.com/auth/tasks.readonly "
+    "https://www.googleapis.com/auth/calendar.readonly"
+)
+CALENDARS_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 PASTE_PORT = 8765  # nothing listens here in --paste mode
 
 
@@ -220,35 +225,47 @@ def main(argv: list[str] | None = None) -> int:
         print("Google returned no refresh token; try again", file=sys.stderr)
         return 1
 
-    data_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "client_id": client_id,
         "client_secret": client_secret,
         "refresh_token": refresh_token,
         "scope": SCOPE,
     }
+    # Google lets you untick individual permissions on the consent screen.
+    granted = str(token.get("scope") or SCOPE).split()
+    missing = [scope for scope in SCOPE.split() if scope not in granted]
+    payload["scope"] = " ".join(scope for scope in SCOPE.split() if scope in granted)
+
+    data_dir.mkdir(parents=True, exist_ok=True)
     fd = os.open(creds_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)  # the mode above only applies when creating the file
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
         handle.write("\n")
     print(f"wrote credentials to {creds_path}")
+    for scope in missing:
+        print(f"warning: not granted: {scope} (tick every box when approving)")
 
-    # Prove the token works, and show the list names the module can use.
-    try:
-        lists = http.get_json(
-            LISTS_URL, headers={"Authorization": f"Bearer {token['access_token']}"}
-        )
-    except (FetchError, KeyError) as exc:
-        print(
-            f"but reading your task lists failed: {exc}\n"
-            "Check that the Google Tasks API is enabled for the project.",
-            file=sys.stderr,
-        )
-        return 1
-    titles = [str(item.get("title")) for item in lists.get("items", [])]
-    print("task lists: " + (", ".join(titles) or "(none)"))
-    return 0
+    # Prove the token works, and show the names the modules can use.
+    headers = {"Authorization": f"Bearer {token.get('access_token')}"}
+    failed = bool(missing)
+    for label, api, url in (
+        ("task lists", "Google Tasks API", LISTS_URL),
+        ("calendars", "Google Calendar API", CALENDARS_URL),
+    ):
+        try:
+            items = http.get_json(url, headers=headers).get("items", [])
+        except (FetchError, AttributeError) as exc:
+            print(
+                f"reading your {label} failed: {exc}\n"
+                f"  Check that the {api} is enabled for the project.",
+                file=sys.stderr,
+            )
+            failed = True
+            continue
+        names = [str(i.get("summary") or i.get("title")) for i in items]
+        print(f"{label}: " + (", ".join(names) or "(none)"))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

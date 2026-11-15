@@ -82,6 +82,7 @@ next start and forget its saved state.
 | `affirmations` | 1 day | 500 chars | include date |
 | `hackernews` | 7 days | 5 items, 1500 chars | window days, min score, scan limit |
 | `google_tasks` | 5 minutes | 30 tasks per list, 3000 chars | morning time, time zone, list, completed today, credentials file |
+| `google_calendar` | 5 minutes | 30 events, 3000 chars | morning time, time zone, calendar, 12/24-hour, credentials file |
 
 - **Daily Affirmation** picks one line per day from
   `modules/affirmations/data/affirmations.txt`; edit that file to customise.
@@ -94,16 +95,24 @@ next start and forget its saved state.
   as ticked boxes. Nothing is fetched before the morning time, and **Run**
   always prints. Setup is below.
 
-### Google Tasks setup
+- **Google Calendar** works the same way for today's events: the itinerary
+  prints at the morning time, then again whenever an event for today is
+  added, moved, renamed or removed. All-day events come first; events you
+  declined are left out. It reads your main calendar unless you name
+  another, or `*` for every calendar ticked in Google Calendar's sidebar.
+
+### Google Tasks and Calendar setup
 
 A personal Google account can only be reached through OAuth with your own
 consent (service accounts cannot see a personal account's tasks, and Google's
 TV/device sign-in does not allow the Tasks scope). GPTA uses a **Desktop app**
-OAuth client and stores a refresh token, read-only (`tasks.readonly`).
+OAuth client and stores a refresh token, read-only (`tasks.readonly` and
+`calendar.readonly`). Both modules share the one sign-in.
 
 1. In the [Google Cloud console](https://console.cloud.google.com/), create a
    project (any name).
-2. **APIs & Services → Library**: find **Google Tasks API** and enable it.
+2. **APIs & Services → Library**: enable **Google Tasks API** and **Google
+   Calendar API**.
 3. **Google Auth Platform → Branding**: fill in an app name and your email.
    If it asks for a privacy policy, GPTA serves one at `/privacy` (edit
    `web/privacy.html` to taste); the address must be reachable publicly.
@@ -125,12 +134,13 @@ OAuth client and stores a refresh token, read-only (`tasks.readonly`).
    `http://127.0.0.1:8765/?...` address the browser ends on (the page itself
    fails to load; that is expected).
 6. The script writes `data/google_credentials.json` (mode 0600, never exposed
-   by the HTTP API) and lists your task lists. Enable the module in the
-   console and press **Run** for a first print.
+   by the HTTP API) and lists your task lists and calendars. Enable the
+   modules in the console and press **Run** for a first print.
 
 If the module later reports that Google rejected the saved sign-in, run the
 script again. That happens if you revoke access, or after 6 months without
-use.
+use, and once after upgrading from 0.4.0 to add Calendar to the sign-in
+(tick every permission box on Google's screen).
 
 To write a module, see [docs/module-authoring.md](docs/module-authoring.md).
 

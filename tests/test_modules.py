@@ -33,6 +33,7 @@ def source(module_id):
 
 HN = source("hackernews")
 GT = source("google_tasks")
+GC = source("google_calendar")
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
 
@@ -294,6 +295,190 @@ class ModuleTests(unittest.TestCase):
             rejected = HttpFetchError("HTTP 400", status=400)
             ctx = self.gt_ctx(tmp, FakeHttp(form_response=rejected))
             with self.assertRaisesRegex(FetchError, "rejected the saved sign-in"):
+                module.fetch(ctx)
+
+    GC_OPTIONS = {
+        "morning_time": "08:00",
+        "timezone": "America/Chicago",
+        "calendar": "",
+        "clock": "12-hour",
+        "credentials_file": "",
+    }
+    # NOW is 12:00 UTC on Oct 18: 07:00 in Chicago (UTC-5), so tests use 15:00.
+    GC_NOW = NOW.replace(hour=15)
+    GC_DAY = (
+        datetime(2026, 10, 18, 5, 0, tzinfo=UTC),
+        datetime(2026, 10, 19, 5, 0, tzinfo=UTC),
+    )
+    GC_EVENTS = [
+        {"id": "a", "summary": "Holiday", "start": {"date": "2026-10-18"}},
+        {
+            "id": "b",
+            "summary": "Dentist",
+            "location": "12 Main St\nSuite 4",
+            "start": {"dateTime": "2026-10-18T09:00:00-05:00"},
+            "end": {"dateTime": "2026-10-18T09:45:00-05:00"},
+        },
+        {
+            "id": "c",
+            "summary": "Call",
+            "start": {"dateTime": "2026-10-18T19:30:00Z"},  # 14:30 local
+            "end": {"dateTime": "2026-10-18T20:00:00Z"},
+        },
+        {
+            "id": "d",
+            "summary": "Skipped",
+            "start": {"dateTime": "2026-10-18T10:00:00-05:00"},
+            "end": {"dateTime": "2026-10-18T11:00:00-05:00"},
+            "attendees": [{"self": True, "responseStatus": "declined"}],
+        },
+        {"id": "e", "eventType": "workingLocation", "start": {"date": "2026-10-18"}},
+        {
+            "id": "f",
+            "summary": "Red-eye",
+            "start": {"dateTime": "2026-10-18T23:00:00-05:00"},
+            "end": {"dateTime": "2026-10-19T03:00:00-05:00"},
+        },
+    ]
+
+    def gc_http(self, events, calendar_id="primary", calendars=None):
+        return FakeHttp(
+            {
+                GC.CALENDARS_URL: {"items": calendars or []},
+                GC.events_url(calendar_id, *self.GC_DAY): {"items": list(events)},
+            },
+            form_response={"access_token": "token"},
+        )
+
+    def gc_ctx(self, tmp, http, *, now=None, store=None, trigger="schedule", **opts):
+        scope = opts.pop("scope", GC.SCOPE)
+        (Path(tmp) / "google_credentials.json").write_text(
+            json.dumps(
+                {
+                    "client_id": "id",
+                    "client_secret": "secret",
+                    "refresh_token": "r",
+                    "scope": f"other {scope}",
+                }
+            )
+        )
+        ctx = make_ctx(
+            "google_calendar",
+            http,
+            tmp,
+            limits={"max_items": 15, "max_chars": 2000},
+            options={**self.GC_OPTIONS, **opts},
+        )
+        changes = {"now": now or self.GC_NOW, "trigger": trigger}
+        if store is not None:
+            changes["store"] = store
+        return replace(ctx, **changes)
+
+    def test_google_calendar(self):
+        module = self.modules["google_calendar"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self.gc_ctx(tmp, self.gc_http(self.GC_EVENTS))
+            blocks = module.fetch(ctx)
+            self.assertEqual(
+                blocks,
+                [
+                    Heading("Sunday, Oct 18"),
+                    Text("4 events", size="small"),
+                    Text("All day", bold=True),
+                    Text("Holiday"),
+                    Text("9:00 AM - 9:45 AM", bold=True),
+                    Text("Dentist"),
+                    Text("12 Main St", size="small"),
+                    Text("2:30 PM - 3:00 PM", bold=True),
+                    Text("Call"),
+                    Text("from 11:00 PM", bold=True),
+                    Text("Red-eye"),
+                ],
+            )
+            self.assertEqual(ctx.store.get("printed_day"), "2026-10-18")
+            self.assertEqual(render_image(build_receipt("GC", blocks), 576).width, 576)
+            ctx = self.gc_ctx(tmp, self.gc_http(self.GC_EVENTS[1:2]), clock="24-hour")
+            self.assertEqual(module.fetch(ctx)[2], Text("09:00 - 09:45", bold=True))
+            self.assertEqual(
+                module.fetch(self.gc_ctx(tmp, self.gc_http([])))[1],
+                Text("Nothing scheduled."),
+            )
+
+    def test_google_calendar_reprints_only_when_the_day_changes(self):
+        module = self.modules["google_calendar"]
+        http = self.gc_http(self.GC_EVENTS[:2])
+        url = GC.events_url("primary", *self.GC_DAY)
+        with tempfile.TemporaryDirectory() as tmp:
+            first = self.gc_ctx(tmp, http)
+            store = first.store
+
+            def at(hour, minute=0, **kwargs):
+                now = NOW.replace(hour=hour, minute=minute)
+                return self.gc_ctx(tmp, http, now=now, store=store, **kwargs)
+
+            http.form_response = FetchError("must not be called")
+            with self.assertRaisesRegex(Skip, "waiting for 08:00"):
+                module.fetch(at(12, 55))  # 07:55 in Chicago
+            http.form_response = {"access_token": "token"}
+            module.fetch(at(13, 0))  # 08:00: the morning itinerary
+            with self.assertRaisesRegex(Skip, "no calendar changes"):
+                module.fetch(at(13, 5))
+            self.assertTrue(module.fetch(at(13, 6, trigger="manual")))
+
+            moved = {
+                **self.GC_EVENTS[1],
+                "start": {"dateTime": "2026-10-18T10:00:00-05:00"},
+                "end": {"dateTime": "2026-10-18T10:45:00-05:00"},
+            }
+            http.json_by_url[url] = {"items": [self.GC_EVENTS[0], moved]}
+            self.assertIn(
+                Text("10:00 AM - 10:45 AM", bold=True), module.fetch(at(13, 10))
+            )
+            http.json_by_url[url] = {
+                "items": [*http.json_by_url[url]["items"], self.GC_EVENTS[2]]
+            }
+            self.assertIn(Text("Call"), module.fetch(at(13, 15)))
+            with self.assertRaises(Skip):
+                module.fetch(at(13, 20))
+
+    def test_google_calendar_named_and_all_calendars(self):
+        module = self.modules["google_calendar"]
+        calendars = [
+            {"id": "me@example.com", "summary": "Me", "selected": True},
+            {
+                "id": "fam",
+                "summary": "x",
+                "summaryOverride": "Family",
+                "selected": True,
+            },
+            {"id": "hidden", "summary": "Hidden"},
+        ]
+        shared = {**self.GC_EVENTS[1], "iCalUID": "uid-1"}
+        with tempfile.TemporaryDirectory() as tmp:
+            http = self.gc_http([shared], "fam", calendars)
+            http.json_by_url[GC.events_url("me@example.com", *self.GC_DAY)] = {
+                "items": [{**shared, "id": "copy"}, self.GC_EVENTS[2]]
+            }
+            blocks = module.fetch(self.gc_ctx(tmp, http, calendar="*"))
+            self.assertEqual(blocks[1], Text("2 events", size="small"))
+            blocks = module.fetch(self.gc_ctx(tmp, http, calendar="family"))
+            self.assertEqual(blocks[1], Text("1 event", size="small"))
+            with self.assertRaisesRegex(FetchError, "found: Me, Family, Hidden"):
+                module.fetch(self.gc_ctx(tmp, http, calendar="Work"))
+
+    def test_google_calendar_sign_in_errors(self):
+        module = self.modules["google_calendar"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self.gc_ctx(tmp, self.gc_http([]), scope="tasks.readonly")
+            with self.assertRaisesRegex(FetchError, "does not include Calendar"):
+                module.fetch(ctx)
+
+            class Refusing(FakeHttp):
+                def get_json(self, url, headers=None):
+                    raise HttpFetchError("HTTP 403", status=403)
+
+            ctx = self.gc_ctx(tmp, Refusing(form_response={"access_token": "t"}))
+            with self.assertRaisesRegex(FetchError, "enable the Google Calendar API"):
                 module.fetch(ctx)
 
 

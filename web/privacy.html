@@ -24,25 +24,39 @@
 
     <h2>Google data GPTA accesses</h2>
     <p>
-      If its owner signs in with Google, GPTA reads that account's Google
-      Tasks (task lists and tasks: titles, notes, due dates and completion
-      status) using the read-only scope
-      <code>https://www.googleapis.com/auth/tasks.readonly</code>. It cannot
-      create, change or delete tasks, and it requests no other Google data.
+      If its owner signs in with Google, GPTA reads, and only reads:
+    </p>
+    <ul>
+      <li>
+        that account's Google Tasks (task lists and tasks: titles, notes, due
+        dates and completion status), with the scope
+        <code>https://www.googleapis.com/auth/tasks.readonly</code>;
+      </li>
+      <li>
+        that account's Google Calendar (the calendar list and the current
+        day's events: titles, times, locations and the owner's own reply),
+        with the scope
+        <code>https://www.googleapis.com/auth/calendar.readonly</code>.
+      </li>
+    </ul>
+    <p>
+      It cannot create, change or delete tasks or events, and it requests no
+      other Google data.
     </p>
 
     <h2>How the data is used</h2>
     <p>
-      Tasks are fetched to print a task list on the owner's printer and to
-      show the same list in the owner's GPTA console. That is the only use.
+      Tasks and the day's events are fetched to print a task list and a daily
+      itinerary on the owner's printer, and to show the same receipts in the
+      owner's GPTA console. That is the only use.
     </p>
 
     <h2>Storage</h2>
     <p>
       Everything is stored on the owner's own machine: the OAuth client
       details and refresh token that keep the sign-in working, the most
-      recent task list, and a fingerprint of it used to detect changes.
-      Each new list replaces the previous one.
+      recent task list and itinerary, and a fingerprint of each used to detect
+      changes. Each new receipt replaces the previous one.
     </p>
 
     <h2>Sharing</h2>
@@ -56,8 +70,8 @@
     <p>
       Access can be revoked at any time at
       <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
-      Deleting GPTA's data directory removes the stored sign-in and task
-      data.
+      Deleting GPTA's data directory removes the stored sign-in, task and
+      calendar data.
     </p>
 
     <h2>Contact</h2>
