@@ -24,7 +24,13 @@ class RegistryTests(unittest.TestCase):
         modules = discover(DEFAULT_MODULES_DIR, errors=errors)
         self.assertEqual(
             sorted(modules),
-            ["affirmations", "google_calendar", "google_tasks", "hackernews"],
+            [
+                "affirmations",
+                "google_calendar",
+                "google_tasks",
+                "hackernews",
+                "weather",
+            ],
         )
         self.assertEqual(errors, {})
 
@@ -41,6 +47,7 @@ class RegistryTests(unittest.TestCase):
                 "google_calendar": ["max_chars", "max_items"],
                 "google_tasks": ["max_chars", "max_items"],
                 "hackernews": ["max_chars", "max_items"],
+                "weather": ["max_chars"],
             },
         )
 

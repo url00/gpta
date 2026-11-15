@@ -83,6 +83,7 @@ next start and forget its saved state.
 | `hackernews` | 7 days | 5 items, 1500 chars | window days, min score, scan limit |
 | `google_tasks` | 5 minutes | 30 tasks per list, 3000 chars | morning time, time zone, list, completed today, credentials file |
 | `google_calendar` | 5 minutes | 30 events, 3000 chars | morning time, time zone, calendar, 12/24-hour, credentials file |
+| `weather` | 5 minutes | 3000 chars | morning time, time zone, latitude, longitude, units, 12/24-hour, alerts |
 
 - **Daily Affirmation** picks one line per day from
   `modules/affirmations/data/affirmations.txt`; edit that file to customise.
@@ -100,6 +101,17 @@ next start and forget its saved state.
   added, moved, renamed or removed. All-day events come first; events you
   declined are left out. It reads your main calendar unless you name
   another, or `*` for every calendar ticked in Google Calendar's sidebar.
+- **Weather** prints today's forecast at the morning time: conditions, high
+  and low, precipitation, wind, UV, sunrise and sunset, and the rest of the
+  day in three-hour steps, with any weather alerts in effect. Every 5
+  minutes, day and night, it also checks for alerts and prints each new one
+  once, in full; the `alerts` option limits that to moderate or severe ones,
+  or turns it off. The forecast comes from [Open-Meteo](https://open-meteo.com/)
+  and alerts from the US National Weather Service (so alerts are US-only);
+  neither needs an account. With latitude and longitude blank it uses the
+  server's location, looked up once a day from its public IP address by
+  [ipapi.co](https://ipapi.co/); set both to choose a place or to skip that
+  lookup.
 
 ### Google Tasks and Calendar setup
 

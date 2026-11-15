@@ -15,7 +15,9 @@ from gpta.module_api import (
     Checkbox,
     FetchError,
     Heading,
+    KeyValue,
     ModuleContext,
+    Rule,
     Skip,
     Text,
 )
@@ -34,6 +36,7 @@ def source(module_id):
 HN = source("hackernews")
 GT = source("google_tasks")
 GC = source("google_calendar")
+WX = source("weather")
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
 
@@ -480,6 +483,235 @@ class ModuleTests(unittest.TestCase):
             ctx = self.gc_ctx(tmp, Refusing(form_response={"access_token": "t"}))
             with self.assertRaisesRegex(FetchError, "enable the Google Calendar API"):
                 module.fetch(ctx)
+
+    WX_OPTIONS = {
+        "morning_time": "08:00",
+        "timezone": "America/Chicago",
+        "latitude": "",
+        "longitude": "",
+        "units": "imperial",
+        "clock": "12-hour",
+        "alerts": "all",
+    }
+    WX_PLACE = {"latitude": 44.81133, "longitude": -91.49849}
+    WX_FORECAST = {
+        "current": {
+            "time": "2026-10-18T10:00",
+            "temperature_2m": 41.4,
+            "apparent_temperature": 35.2,
+            "weather_code": 3,
+        },
+        "hourly": {
+            "time": [f"2026-10-18T{hour:02d}:00" for hour in range(24)],
+            "temperature_2m": [30 + hour for hour in range(24)],
+            "weather_code": [61 if hour == 14 else 0 for hour in range(24)],
+            "precipitation_probability": [
+                60 if hour == 14 else 10 for hour in range(24)
+            ],
+        },
+        "daily": {
+            "time": ["2026-10-18"],
+            "weather_code": [61],
+            "temperature_2m_max": [53.6],
+            "temperature_2m_min": [-0.2],
+            "precipitation_probability_max": [60],
+            "precipitation_sum": [0.123],
+            "wind_speed_10m_max": [12.2],
+            "wind_gusts_10m_max": [25.7],
+            "wind_direction_10m_dominant": [310],
+            "sunrise": ["2026-10-18T07:21"],
+            "sunset": ["2026-10-18T18:14"],
+            "uv_index_max": [3.4],
+        },
+    }
+
+    @staticmethod
+    def wx_alert(alert_id, event, severity="Moderate", **extra):
+        properties = {
+            "id": alert_id,
+            "event": event,
+            "severity": severity,
+            "status": "Actual",
+            "messageType": "Alert",
+            "ends": "2026-10-19T06:00:00-05:00",
+            "description": "* WHAT...Snow.\nUp to 6\ninches.\n\n* WHERE...Here.",
+            "instruction": "Slow down.",
+            **extra,
+        }
+        return {"properties": properties}
+
+    def wx_http(self, alerts=(), units="imperial", **place):
+        place = {**self.WX_PLACE, "city": "Eau Claire", "region": "Wisconsin", **place}
+        spot = round(place["latitude"], 2), round(place["longitude"], 2)
+        return FakeHttp(
+            {
+                WX.LOCATE_URL: place,
+                WX.forecast_url(*spot, units, "America/Chicago"): self.WX_FORECAST,
+                WX.alerts_url(*spot): {"features": list(alerts)},
+            }
+        )
+
+    def wx_ctx(self, tmp, http, *, hour=15, minute=0, store=None, **opts):
+        trigger = opts.pop("trigger", "schedule")
+        ctx = make_ctx(
+            "weather",
+            http,
+            tmp,
+            limits={"max_chars": 3000},
+            options={**self.WX_OPTIONS, **opts},
+        )
+        # NOW is 07:00 in Chicago (UTC-5); hour 15 is 10:00.
+        changes = {"now": NOW.replace(hour=hour, minute=minute), "trigger": trigger}
+        if store is not None:
+            changes["store"] = store
+        return replace(ctx, **changes)
+
+    def test_weather_forecast(self):
+        module = self.modules["weather"]
+        alert = self.wx_alert("urn:1", "Winter Storm Warning", "Severe")
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self.wx_ctx(tmp, self.wx_http([alert]))
+            blocks = module.fetch(ctx)
+            self.assertEqual(
+                blocks,
+                [
+                    Heading("Sunday, Oct 18"),
+                    Text("Eau Claire, Wisconsin", size="small"),
+                    Text("Light rain", size="large", bold=True),
+                    KeyValue("High / Low", "54° / 0°"),
+                    KeyValue("Now", "41° (feels 35°)"),
+                    KeyValue("Precipitation", '60%, 0.12"'),
+                    KeyValue("Wind", "NW 12 mph, gusts 26"),
+                    KeyValue("UV index", "3"),
+                    KeyValue("Sun", "7:21 AM - 6:14 PM"),
+                    Rule(),
+                    KeyValue("11 AM", "41° Clear"),
+                    KeyValue("2 PM", "44° Light rain 60%"),
+                    KeyValue("5 PM", "47° Clear"),
+                    KeyValue("8 PM", "50° Clear"),
+                    KeyValue("11 PM", "53° Clear"),
+                    Rule(heavy=True),
+                    Text("Alerts in effect", size="small"),
+                    Text("Winter Storm Warning", bold=True),
+                    Text("Until 6:00 AM Mon, Oct 19", size="small"),
+                ],
+            )
+            self.assertEqual(ctx.store.get("printed_day"), "2026-10-18")
+            self.assertEqual(ctx.store.get("alerts_printed"), ["urn:1"])
+            self.assertEqual(ctx.store.get("location")["lat"], 44.81)
+            self.assertEqual(render_image(build_receipt("WX", blocks), 576).width, 576)
+
+            # Metric units, a 24-hour clock and fixed coordinates.
+            http = self.wx_http(units="metric", latitude=51.5, longitude=-0.12)
+            del http.json_by_url[WX.LOCATE_URL]
+            ctx = self.wx_ctx(
+                tmp,
+                http,
+                units="metric",
+                clock="24-hour",
+                latitude="51.5",
+                longitude="-0.12",
+            )
+            blocks = module.fetch(ctx)
+            self.assertEqual(blocks[1], Text("Light rain", size="large", bold=True))
+            self.assertIn(KeyValue("Precipitation", "60%, 0.1 mm"), blocks)
+            self.assertIn(KeyValue("Wind", "NW 12 km/h, gusts 26"), blocks)
+            self.assertIn(KeyValue("Sun", "07:21 - 18:14"), blocks)
+            self.assertIn(KeyValue("14:00", "44° Light rain 60%"), blocks)
+
+    def test_weather_prints_once_a_day_then_only_new_alerts(self):
+        module = self.modules["weather"]
+        http = self.wx_http()
+        alerts = http.json_by_url[WX.alerts_url(44.81, -91.5)]
+        forecast = WX.forecast_url(44.81, -91.5, "imperial", "America/Chicago")
+        watch = self.wx_alert("urn:1", "Frost Advisory", "Minor")
+        warning = self.wx_alert("urn:2", "Tornado Warning", "Extreme")
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self.wx_ctx(tmp, http).store
+
+            def run(hour, minute=0, **kwargs):
+                ctx = self.wx_ctx(tmp, http, hour=hour, minute=minute, store=store)
+                return module.fetch(replace(ctx, **kwargs))
+
+            saved = http.json_by_url.pop(forecast)  # not fetched before 08:00
+            with self.assertRaisesRegex(Skip, "forecast at 08:00"):
+                run(12, 55)  # 07:55 in Chicago
+            alerts["features"] = [watch]
+            self.assertEqual(  # alerts print at any hour, in full
+                run(12, 56),
+                [
+                    Heading("Frost Advisory"),
+                    Text("Until 6:00 AM Mon, Oct 19", bold=True),
+                    Text("* WHAT...Snow. Up to 6 inches.\n* WHERE...Here."),
+                    Text("Slow down."),
+                ],
+            )
+            http.json_by_url[forecast] = saved
+            self.assertIn(Text("Frost Advisory", bold=True), run(13, 0))
+            del http.json_by_url[forecast]
+            del http.json_by_url[WX.LOCATE_URL]  # looked up once a day
+            with self.assertRaisesRegex(Skip, "no new weather alerts$"):
+                run(13, 5)
+
+            alerts["features"] = [watch, warning]
+            blocks = run(13, 10)
+            self.assertEqual(blocks[0], Heading("Tornado Warning"))
+            self.assertNotIn(Heading("Frost Advisory"), blocks)
+            with self.assertRaises(Skip):
+                run(13, 15)
+            alerts["features"] = [watch]
+            with self.assertRaises(Skip):
+                run(13, 20)
+            self.assertEqual(store.get("alerts_printed"), ["urn:1"])
+
+            http.json_by_url[forecast] = saved
+            http.json_by_url[WX.LOCATE_URL] = self.WX_PLACE
+            self.assertEqual(
+                run(13, 25, trigger="manual")[0], Heading("Sunday, Oct 18")
+            )
+
+    def test_weather_alert_filter_and_failures(self):
+        module = self.modules["weather"]
+        minor = self.wx_alert("urn:1", "Frost Advisory", "Minor")
+        severe = self.wx_alert("urn:2", "Blizzard Warning", "Severe")
+        test = self.wx_alert("urn:3", "Test Message", "Extreme", status="Test")
+        with tempfile.TemporaryDirectory() as tmp:
+            http = self.wx_http([minor, test, severe])
+            blocks = module.fetch(self.wx_ctx(tmp, http, alerts="severe and up"))
+            self.assertEqual(blocks[-3], Text("Alerts in effect", size="small"))
+            self.assertEqual(blocks[-2], Text("Blizzard Warning", bold=True))
+            blocks = module.fetch(self.wx_ctx(tmp, http))
+            self.assertEqual(blocks[-4], Text("Blizzard Warning", bold=True))
+            self.assertEqual(blocks[-2], Text("Frost Advisory", bold=True))
+            blocks = module.fetch(self.wx_ctx(tmp, http, alerts="off"))
+            self.assertNotIn(Text("Alerts in effect", size="small"), blocks)
+
+            class NoAlerts(FakeHttp):
+                status = 400
+
+                def get_json(self, url, headers=None):
+                    if url.startswith(WX.ALERTS_API):
+                        raise HttpFetchError("HTTP error", status=self.status)
+                    return super().get_json(url, headers)
+
+            # Outside the US there is no alert service: not an error.
+            http = NoAlerts(self.wx_http().json_by_url)
+            first = self.wx_ctx(tmp, http)
+            self.assertIsInstance(module.fetch(first)[-1], KeyValue)
+            with self.assertRaises(Skip):
+                module.fetch(self.wx_ctx(tmp, http, store=first.store))
+            # An outage fails an alert check but not the morning forecast.
+            http.status = 503
+            self.assertIsInstance(module.fetch(self.wx_ctx(tmp, http))[-1], KeyValue)
+            with self.assertRaises(FetchError):
+                module.fetch(self.wx_ctx(tmp, http, store=first.store))
+
+            with self.assertRaisesRegex(FetchError, "set latitude and longitude"):
+                module.fetch(self.wx_ctx(tmp, FakeHttp()))
+            with self.assertRaisesRegex(FetchError, "must both be numbers"):
+                module.fetch(self.wx_ctx(tmp, FakeHttp(), latitude="44.8"))
+            with self.assertRaisesRegex(FetchError, "HH:MM"):
+                module.fetch(self.wx_ctx(tmp, FakeHttp(), morning_time="8am"))
 
 
 if __name__ == "__main__":
