@@ -466,3 +466,11 @@ pre { margin: 0.35rem 0 0; font: inherit; }
   overflow-wrap: anywhere;
 }
 .queue-held:empty { display: none; }
+
+/* ---- settings ---------------------------------------------------- */
+.settings-panel > h3 { margin: 1.4rem 0 0.2rem; }
+.settings-panel .desc { margin-bottom: 0.6rem; }
+.settings-panel .actions { margin-top: 0.6rem; }
+.select-paper { margin: 0.8rem 0; }
+.select-paper .receipt-empty { margin: 4rem auto; }
+.jobs li.expired { opacity: 0.6; }

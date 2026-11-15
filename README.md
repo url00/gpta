@@ -32,6 +32,7 @@ valid JSON stops startup (exit status 78).
 |---|---|---|
 | `server.host`, `server.port` | `127.0.0.1`, `8787` | `--host`/`--port` override for one run |
 | `server.allowed_hosts` | `localhost`, `127.0.0.1`, `::1` | Hostnames the server answers to; add a tunnel's public hostname here |
+| `server.public_url` | (empty) | The address phones reach the server at, e.g. `https://gpta.example.com`. Printed QR selection codes link to it, and its host is answered too. Set on the Settings tab; modules cannot print selection lists without it |
 | `server.run_timeout_seconds` | `120` | Per-run fetch timeout |
 | `printer.*` | disabled, `/dev/usb/lp0`, 80 mm paper | CUPS queue or device, paper size, auto-print, queue limits, module output defaults; see [Printer](#printer) |
 | `modules.<id>.*` | per module | `enabled`, `interval_seconds`, `limits`, `options` |
@@ -250,6 +251,10 @@ limits.
 | POST | `/api/reader/fetch` | Fetch `{"url", "size", "layout"}` reader-mode style and lay out the whole page. Returns an `id` for printing, a `png` preview, `chars` (characters that will print), `total` (the page's characters; more than `chars` only past the 150,000 safety cap) and `paper_mm` (paper length). Public http(s) sites only |
 | POST | `/api/reader/print` | Print `{"id", "size", "layout"}` from a recent fetch, exactly as previewed. The last 8 fetches are kept, until a restart |
 | POST | `/api/printer/test` | Queue a test page |
+| PATCH | `/api/server` | Update `public_url`, the address printed QR selection codes link to (`""` clears it). Other server settings need a restart |
+| GET | `/s/<token>` | A scanned QR selection code: runs the module's `on_select()` for that item and prints the result; answers with a small HTML page. Repeats within 30 seconds are ignored; `410` once expired |
+| GET | `/api/selections` | `public_url` and the 50 newest selection codes: `path`, `module`, `title`, `expires_at`, `expired`, `use_count`, `last_used_at`, `last_result` |
+| POST | `/api/selections/test` | Make a sample selection list from `{"count", "side", "qr", "numbered", "rules", "expires_hours"}` and return its `png` preview and the code list; `"print": true` also prints it. Scanning a test code prints a confirmation |
 | GET | `/api/queue` | The print queue: `paused`, `blocked` (why it is held, or null), `current`, `pending`, `history`, `warn_length_mm`. Each job has `id`, `source`, `kind`, `state`, `length_mm`, `needs_approval`, `can_retry`, times and `error` |
 | GET | `/api/queue/<id>.png` | A waiting, printing or failed job's image |
 | POST | `/api/queue/pause`, `/api/queue/resume` | Pause or resume all printing |
@@ -287,6 +292,7 @@ sees files Git tracks, so `git add` new files first.
 | `gpta/httpserver.py`, `gpta/http.py` | Console/API server; outbound HTTP client for modules |
 | `gpta/module_api.py` | Module interface: a facade re-exporting everything a module may import |
 | `gpta/blocks.py`, `gpta/markdown.py` | Receipt block kinds and `Document` (layout, print size); Markdown to blocks |
+| `gpta/selections.py` | QR selection lists (`ctx.selections`): codes a phone scans to choose a printed item |
 | `gpta/storage.py`, `gpta/state.py`, `gpta/cache.py` | SQLite database and module stores (`ctx.store`); run state kept across restarts; download cache (`ctx.cache`) |
 | `gpta/renderer.py`, `gpta/fonts/` | Receipt layout (image and plain text); the bundled font and its license |
 | `modules/<id>/` | One module per folder |

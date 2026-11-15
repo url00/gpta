@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import mimetypes
@@ -13,10 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .config import ConfigError
+from .config import ConfigError, public_host
 from .errors import AlreadyRunning, InvalidRequest, NotFound
 from .printing import PrinterDisabled, PrinterError, PrinterRateLimited
-from .service import Service
+from .selections import SCAN_PATH
+from .service import ScanResult, Service
 
 log = logging.getLogger("gpta.httpserver")
 
@@ -68,6 +70,12 @@ ROUTES: list[tuple[str, re.Pattern[str], str]] = [
         ("POST", r"/api/instant/print", "instant_print"),
         ("POST", r"/api/reader/fetch", "reader_fetch"),
         ("POST", r"/api/reader/print", "reader_print"),
+        # A scanned QR selection code. GET on purpose: a phone's camera opens
+        # links. The token is the credential; see gpta/selections.py.
+        ("GET", re.escape(SCAN_PATH) + r"(?P<token>[A-Za-z0-9_-]{8,64})", "scan"),
+        ("GET", r"/api/selections", "selections"),
+        ("POST", r"/api/selections/test", "selection_test"),
+        ("PATCH", r"/api/server", "patch_server"),
         ("GET", r"/api/queue", "queue"),
         ("GET", r"/api/queue/(?P<job_id>\d{1,12})\.png", "queue_png"),
         ("POST", r"/api/queue/(?P<action>pause|resume|clear)", "queue_control"),
@@ -78,6 +86,31 @@ ROUTES: list[tuple[str, re.Pattern[str], str]] = [
         ),
     )
 ]
+
+
+SCAN_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{heading} · GPTA</title>
+<style>
+body {{ font: 1.1rem/1.4 ui-monospace, Menlo, Consolas, monospace; margin: 0;
+  min-height: 100vh; display: grid; place-content: center; text-align: center;
+  padding: 1.5rem; background: #fff; color: #000; }}
+h1 {{ font-size: 1.8rem; margin: 0 0 0.6rem; text-transform: uppercase; }}
+p {{ margin: 0; overflow-wrap: anywhere; }}
+</style>
+</head>
+<body data-state="{state}">
+<main>
+<h1>{heading}</h1>
+<p>{detail}</p>
+</main>
+</body>
+</html>
+"""
 
 
 def _hostname(value: str) -> str:
@@ -212,6 +245,18 @@ class Handler(BaseHTTPRequestHandler):
     def _h_reader_print(self) -> None:
         self._json(200, self.server.service.reader_print(self._body_json))
 
+    def _h_scan(self, token: str) -> None:
+        self._scan_page(self.server.service.scan(token))
+
+    def _h_selections(self) -> None:
+        self._json(200, self.server.service.selections_list())
+
+    def _h_selection_test(self) -> None:
+        self._json(200, self.server.service.selection_test(self._body_json))
+
+    def _h_patch_server(self) -> None:
+        self._json(200, {"server": self.server.service.set_server(self._body_json)})
+
     def _h_queue(self) -> None:
         self._json(200, self.server.service.queue())
 
@@ -308,6 +353,26 @@ class Handler(BaseHTTPRequestHandler):
         self._send_headers(status, "text/plain; charset=utf-8", len(data))
         self.wfile.write(data)
 
+    def _scan_page(self, result: ScanResult) -> None:
+        """The small page a phone shows after scanning a selection code."""
+        page = SCAN_PAGE.format(
+            heading=html.escape(result.heading),
+            detail=html.escape(result.detail),
+            state=html.escape(result.state),
+        ).encode("utf-8")
+        self._send_headers(
+            result.status,
+            "text/html; charset=utf-8",
+            len(page),
+            {
+                "Content-Security-Policy": "default-src 'none'; "
+                "style-src 'unsafe-inline'",
+                "Referrer-Policy": "no-referrer",
+                "X-Robots-Tag": "noindex",
+            },
+        )
+        self.wfile.write(page)
+
     def _serve_static(self, rel: str) -> None:
         if not rel or "\x00" in rel:
             raise NotFound("not found")
@@ -346,8 +411,17 @@ class Handler(BaseHTTPRequestHandler):
         # Rejecting unknown Host headers blocks DNS rebinding: a hostile page
         # that rebinds its own name to 127.0.0.1 still sends its own name.
         host = self.headers.get("Host")
-        if not host or _hostname(host) not in self.server.allowed_hosts:
+        if not host or _hostname(host) not in self._allowed_hosts():
             raise Forbidden("host not allowed; add it to server.allowed_hosts")
+
+    def _allowed_hosts(self) -> set[str]:
+        """The allowlist plus the host of ``server.public_url``, which can
+        change while running: printed codes must keep working."""
+        public = public_host(
+            self.server.service.config.snapshot()["server"]["public_url"]
+        )
+        allowed = self.server.allowed_hosts
+        return allowed | {public} if public else allowed
 
     def _check_origin(self) -> None:
         # Browsers send Origin on cross-origin and POST/PATCH requests.
@@ -356,7 +430,7 @@ class Handler(BaseHTTPRequestHandler):
         if origin is None:
             return
         netloc = urllib.parse.urlsplit(origin).netloc
-        if not netloc or _hostname(netloc) not in self.server.allowed_hosts:
+        if not netloc or _hostname(netloc) not in self._allowed_hosts():
             raise Forbidden("cross-origin request rejected")
 
     # -- request body --------------------------------------------------

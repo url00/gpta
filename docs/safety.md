@@ -30,6 +30,9 @@ records what happens when things go wrong.
 | Module run fails or times out after writing to its store | Writes are held until the run succeeds | Nothing is saved; a timed-out worker's later writes raise | Automatic |
 | Stored setting unknown or invalid (e.g. after a module schema change) | `ConfigStore.load()` | Warning logged; the setting falls back to its default; other settings are kept | Automatic; the file is rewritten on the next save |
 | Config file unreadable (not JSON / not an object) | `ConfigStore.load()` | Startup exits with status 78 and a one-line error; systemd does not restart on 78 | Fix/remove `data/config.json` |
+| Selection code scanned twice (link pre-fetch, double tap) | `debounce_until` on the code | The second scan within 30 s is answered "already sent" and does nothing | Automatic; a failed scan can be retried at once |
+| Selection code expired or unknown | Lookup in `selections` | `410` / `404` page; nothing runs | Print a new list |
+| Selection handler hangs or fails | `on_select()` runs under the run timeout, at most 4 at once | Error page on the phone; nothing printed or saved; scheduled runs unaffected | Scan again |
 | Unknown module/output | Route lookup | `404` | — |
 | Concurrent manual run | Runtime flag | `409` | Wait for the run or timeout |
 | Timed-out worker still alive | Abandoned-thread check | New run returns `ok: false` with a clear error (not `409`) | Recovers when the worker returns; restart if it never does |
@@ -61,8 +64,17 @@ records what happens when things go wrong.
   (cross-site form posts cannot send it), and a browser `Origin` header must
   name an allowed host. Both checks run centrally in the request dispatcher,
   so new endpoints inherit them.
+- **Scanned selection codes:** `GET /s/<token>` is the only request that
+  changes state without a JSON body, because a phone camera can only open a
+  link. It can do one thing: run the action the server stored for that
+  96-bit random token, which was printed on paper by the server itself. The
+  payload never leaves the server. Scans are debounced, `HEAD` is refused,
+  and the response is a static page with a `default-src 'none'` policy and
+  HTML-escaped text. `/api/selections` lists live tokens; like the rest of
+  the API it relies on the authentication layer in front.
 - **`Host` allowlist:** requests are answered only when the `Host` header is
-  in `server.allowed_hosts` (plus the bind address). This is the DNS-rebinding
+  in `server.allowed_hosts` (plus the bind address and the host of
+  `server.public_url`). This is the DNS-rebinding
   guard. Tunneled public hostnames must be listed explicitly.
 - **Web page fetches (reader mode):** `/api/reader/fetch` downloads a URL from
   the server, so it is guarded against reaching the local network: only

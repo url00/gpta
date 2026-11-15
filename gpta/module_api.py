@@ -11,6 +11,7 @@ re-exported, so modules never import host internals:
 - :mod:`gpta.markdown`: :func:`markdown_blocks`
 - :mod:`gpta.cache`: ``ctx.cache``
 - :mod:`gpta.storage`: ``ctx.store``
+- :mod:`gpta.selections`: ``ctx.selections`` and :class:`Choice`
 
 It must stay importable without Pillow, so it never imports the renderer.
 """
@@ -35,11 +36,13 @@ from .blocks import (
     Heading,
     KeyValue,
     QrCode,
+    QrItem,
     Rule,
     Text,
 )
 from .cache import Cache
 from .markdown import to_blocks as markdown_blocks
+from .selections import Choice, SelectionError, Selections, SelectionStore
 from .storage import Database, ModuleStore, StoreError
 
 __all__ = [
@@ -52,6 +55,7 @@ __all__ = [
     "Block",
     "Cache",
     "Checkbox",
+    "Choice",
     "Document",
     "Element",
     "FetchError",
@@ -61,7 +65,10 @@ __all__ = [
     "ModuleContext",
     "ModuleStore",
     "QrCode",
+    "QrItem",
     "Rule",
+    "SelectionError",
+    "Selections",
     "Skip",
     "StoreError",
     "Text",
@@ -91,6 +98,10 @@ def _memory_store() -> ModuleStore:
     return ModuleStore(Database(None), "test")
 
 
+def _memory_selections() -> Selections:
+    return Selections(SelectionStore(Database(None)), "test", "http://gpta.test")
+
+
 @dataclass(frozen=True)
 class ModuleContext:
     """Everything a module may use during a fetch."""
@@ -106,10 +117,13 @@ class ModuleContext:
     #: The module's saved state. The host always passes one; the default is
     #: an empty in-memory store, so tests can build a context without it.
     store: ModuleStore = field(default_factory=_memory_store)
-    #: What started the run: ``"schedule"`` or ``"manual"`` (the Run button
-    #: or the API). A module that skips unchanged runs should still print
-    #: when asked by hand.
+    #: What started the run: ``"schedule"``, ``"manual"`` (the Run button
+    #: or the API), or ``"select"`` in ``on_select()``. A module that skips
+    #: unchanged runs should still print when asked by hand.
     trigger: str = "schedule"
+    #: Makes QR selection lists (``ctx.selections.offer(...)``). The default
+    #: is an in-memory one for tests, with links under ``http://gpta.test``.
+    selections: Selections = field(default_factory=_memory_selections)
 
     def emit(self, message: str, level: str = "info") -> None:
         self.log(message, level)
@@ -157,6 +171,13 @@ class Module:
 
     def fetch(self, ctx: ModuleContext) -> list[Element] | Document:  # pragma: no cover
         raise NotImplementedError
+
+    def on_select(self, ctx: ModuleContext, payload: Any) -> list[Element] | Document:
+        """Called when a code from ``ctx.selections.offer()`` is scanned,
+        with that choice's ``payload``. Returns what to print, like
+        ``fetch()``; the host adds the header and footer but does not apply
+        ``max_chars``. Raise :class:`Skip` to print nothing."""
+        raise NotImplementedError(f"{self.id} does not handle selections")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<{type(self).__name__} id={self.id!r}>"

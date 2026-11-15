@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,13 @@ DEFAULT_SERVER = {
     # Hostnames accepted in the Host header (port ignored). Add any public
     # hostname a tunnel or reverse proxy forwards, e.g. "gpta.example.com".
     "allowed_hosts": ["localhost", "127.0.0.1", "::1"],
+    # The address phones reach this server at, e.g. "https://gpta.example.com".
+    # Printed QR selection codes link to it; its host is also accepted in the
+    # Host header. Empty: selection lists cannot be made.
+    "public_url": "",
 }
+#: Server settings that can change while running (the rest need a restart).
+LIVE_SERVER_KEYS = {"public_url"}
 DEFAULT_PRINTER = {
     "enabled": False,
     "auto_print": True,
@@ -313,7 +320,41 @@ def _normalise_server(raw: Any) -> dict[str, Any]:
     ):
         raise ConfigError("server.allowed_hosts must be a non-empty list of hostnames")
     result["allowed_hosts"] = [h.strip().lower() for h in hosts]
+    result["public_url"] = _public_url(result["public_url"])
     return result
+
+
+def _public_url(value: Any) -> str:
+    """``server.public_url`` normalised: empty, or scheme://host[:port][/path]
+    without a trailing slash."""
+    if not isinstance(value, str):
+        raise ConfigError("server.public_url must be a string")
+    value = value.strip().rstrip("/")
+    if not value:
+        return ""
+    problem = "server.public_url must look like https://host or http://host:port"
+    if len(value) > 200 or any(ch.isspace() or ord(ch) < 33 for ch in value):
+        raise ConfigError(problem)
+    try:
+        parts = urllib.parse.urlsplit(value)
+        _port = parts.port
+    except ValueError as exc:
+        raise ConfigError(problem) from exc
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or parts.fragment
+    ):
+        raise ConfigError(problem)
+    return value
+
+
+def public_host(public_url: str) -> str:
+    """The lowercase hostname of a normalised ``server.public_url``, or ""."""
+    return (urllib.parse.urlsplit(public_url).hostname or "").lower()
 
 
 def _normalise_printer(raw: Any) -> dict[str, Any]:
@@ -539,6 +580,28 @@ class ConfigStore:
             normalised = _normalise_printer(candidate)
             data = copy.deepcopy(self._data)
             data["printer"] = normalised
+            self._write(data)
+            self._data = data
+            return copy.deepcopy(normalised)
+
+    def update_server(self, patch: Any) -> dict[str, Any]:
+        """Change the server settings that apply without a restart."""
+        if not isinstance(patch, dict):
+            raise ConfigError("server patch must be an object")
+        unknown = set(patch) - LIVE_SERVER_KEYS
+        if unknown:
+            raise ConfigError(
+                f"server settings that cannot be changed here: "
+                f"{', '.join(sorted(unknown))}"
+            )
+        with self._lock:
+            if self._data is None:
+                raise RuntimeError("ConfigStore.load() must be called first")
+            candidate = copy.deepcopy(self._data["server"])
+            candidate.update(patch)
+            normalised = _normalise_server(candidate)
+            data = copy.deepcopy(self._data)
+            data["server"] = normalised
             self._write(data)
             self._data = data
             return copy.deepcopy(normalised)

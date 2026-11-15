@@ -222,12 +222,61 @@ class QrCode:
             raise ValueError(f"QrCode.data must be at most {QR_MAX_CHARS} characters")
 
 
+#: Which side of a :class:`QrItem` its code sits on.
+QR_SIDES = ("left", "right")
+#: :class:`QrItem` code widths, in dots at 203 dpi (about 15, 20 and 25 mm).
+QR_SIZES = {"small": 120, "medium": 160, "large": 200}
+
+
+@dataclass(frozen=True)
+class QrItem:
+    """One row of a list: text with a QR code for ``data`` beside it.
+
+    ``title`` prints bold, with ``label`` (a number, say) before it and
+    ``note`` in small text underneath. ``side`` is the code's side of the
+    paper and ``qr`` its size, one of :data:`QR_SIZES`.
+    """
+
+    kind: ClassVar[str] = "qr_item"
+
+    data: str
+    title: str
+    note: str = ""
+    label: str = ""
+    side: str = "right"
+    qr: str = "medium"
+
+    def __post_init__(self) -> None:
+        _str(self.data, "QrItem.data")
+        if not self.data:
+            raise ValueError("QrItem.data must not be empty")
+        if len(self.data) > QR_MAX_CHARS:
+            raise ValueError(f"QrItem.data must be at most {QR_MAX_CHARS} characters")
+        _str(self.title, "QrItem.title")
+        _str(self.note, "QrItem.note")
+        _str(self.label, "QrItem.label")
+        _choice(self.side, "QrItem.side", QR_SIDES)
+        _choice(self.qr, "QrItem.qr", tuple(QR_SIZES))
+
+
 #: Everything a module may return from ``fetch()``.
-Element = Block | Heading | Text | Rule | KeyValue | Checkbox | BarChart | QrCode
+Element = (
+    Block | Heading | Text | Rule | KeyValue | Checkbox | BarChart | QrCode | QrItem
+)
 
 KINDS: dict[str, type] = {
     cls.kind: cls
-    for cls in (Block, Heading, Text, Rule, KeyValue, Checkbox, BarChart, QrCode)
+    for cls in (
+        Block,
+        Heading,
+        Text,
+        Rule,
+        KeyValue,
+        Checkbox,
+        BarChart,
+        QrCode,
+        QrItem,
+    )
 }
 
 
@@ -248,8 +297,8 @@ class Document:
     :data:`LAYOUTS` and ``size`` one of :data:`PRINT_SIZES`; leave either as
     ``None`` to use the operator's default for module output. The operator
     can also override both per module. In a column layout the first ``lead``
-    blocks stay full width, as do headings, rules, QR codes and centred
-    text; by default (``None``) the lead is everything up to the first heavy
+    blocks stay full width, as do headings, rules, QR codes, QR items and
+    centred text; by default (``None``) the lead is everything up to the first heavy
     rule.
     """
 
@@ -284,6 +333,8 @@ def text_of(element: Element) -> str:
         return element.text + element.value + element.note
     if isinstance(element, BarChart):
         return element.title + "".join(bar.label for bar in element.bars)
+    if isinstance(element, QrItem):
+        return element.label + element.title + element.note
     return ""
 
 

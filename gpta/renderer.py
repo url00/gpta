@@ -29,6 +29,7 @@ from .blocks import (
     KINDS,
     LAYOUTS,
     PRINT_SIZES,
+    QR_SIZES,
     BarChart,
     Block,
     Checkbox,
@@ -37,6 +38,7 @@ from .blocks import (
     Heading,
     KeyValue,
     QrCode,
+    QrItem,
     Rule,
     Text,
     from_dict,
@@ -373,6 +375,12 @@ def _element_text(element: Any, width: int) -> list[str]:
             _align(line, width, "center")
             for line in wrap_text(f"[QR: {element.data}]", width)
         ] + [""]
+    if isinstance(element, QrItem):
+        head = f"{element.label} {element.title}".strip()
+        lines = wrap_text(head, width)
+        if element.note:
+            lines += wrap_text(element.note, width)
+        return lines + wrap_text(f"[QR: {element.data}]", width) + [""]
     if isinstance(element, KeyValue):
         label, value = clean_text(element.label), clean_text(element.value)
         if len(label) + len(value) + 1 <= width:
@@ -718,6 +726,8 @@ def _layout_element(out: _Layout, element: Any) -> None:
         _layout_bar_chart(out, element)
     elif isinstance(element, QrCode):
         _layout_qr(out, element)
+    elif isinstance(element, QrItem):
+        _layout_qr_item(out, element)
     elif isinstance(element, Ruler):
         _layout_ruler(out)
     else:
@@ -731,12 +741,9 @@ QR_TARGET_PX = 200
 QR_QUIET_MODULES = 2
 
 
-def _layout_qr(out: _Layout, element: QrCode) -> None:
-    rows = segno.make(element.data, error="m", micro=False).matrix
-    count = len(rows) + 2 * QR_QUIET_MODULES
-    module = max(2, min(6, round(QR_TARGET_PX / count)))
-    module = max(1, min(module, out.inner // count))
-    left = out.left + (out.inner - count * module) // 2
+def _qr_painter(rows, module: int, left: int) -> Paint:
+    """Paints a QR matrix with ``module``-dot modules, its quiet zone
+    starting at ``left``."""
     quiet = QR_QUIET_MODULES * module
 
     def paint(draw, y):
@@ -755,7 +762,57 @@ def _layout_qr(out: _Layout, element: QrCode) -> None:
                     [x0, top, x0 + (c - start) * module - 1, top + module - 1], fill=0
                 )
 
-    out.add(count * module, paint)
+    return paint
+
+
+def _qr_matrix(data: str, target: int, room: int):
+    """The QR matrix for ``data`` and its module size in dots: about
+    ``target`` dots wide with its quiet zone, and never wider than ``room``."""
+    rows = segno.make(data, error="m", micro=False).matrix
+    count = len(rows) + 2 * QR_QUIET_MODULES
+    module = max(2, min(6, round(target / count)))
+    return rows, max(1, min(module, room // count)), count
+
+
+def _layout_qr(out: _Layout, element: QrCode) -> None:
+    rows, module, count = _qr_matrix(element.data, QR_TARGET_PX, out.inner)
+    left = out.left + (out.inner - count * module) // 2
+    out.add(count * module, _qr_painter(rows, module, left))
+
+
+def _layout_qr_item(out: _Layout, element: QrItem) -> None:
+    """The code on one side, the text wrapped in the space beside it and
+    centred against it. Full width in column layouts, so codes line up."""
+    theme = out.theme
+    # The code takes at most half the width, so narrow paper keeps text.
+    rows, module, count = _qr_matrix(element.data, QR_SIZES[element.qr], out.inner // 2)
+    code = count * module
+    gutter = theme.margin
+    text_w = max(1, out.inner - code - gutter)
+    if element.side == "left":
+        code_x, text_x = out.left, out.left + code + gutter
+    else:
+        code_x, text_x = out.right - code, out.left
+
+    bold, small = font(theme.body, True), font(theme.small)
+    head = clean_text(f"{element.label} {element.title}".strip())
+    lines = [(line, bold) for line in _wrap_px(head, bold, text_w)]
+    lines += [
+        (line, small) for line in _wrap_px(clean_text(element.note), small, text_w)
+    ]
+    lines = [(line, face) for line, face in lines if line]
+    text_h = sum(_line_height(face) for _line, face in lines)
+    height = max(code, text_h)
+    paint_code = _qr_painter(rows, module, code_x)
+
+    def paint(draw, y):
+        paint_code(draw, y + (height - code) // 2)
+        top = y + (height - text_h) // 2
+        for line, face in lines:
+            draw.text((text_x, top), line, font=face, fill=0)
+            top += _line_height(face)
+
+    out.add(height, paint)
 
 
 def _layout_key_value(out: _Layout, element: KeyValue) -> None:
@@ -921,7 +978,7 @@ def render_image(
 
 
 def _full_width(element: Any) -> bool:
-    if isinstance(element, (Heading, Rule, Ruler, QrCode)):
+    if isinstance(element, (Heading, Rule, Ruler, QrCode, QrItem)):
         return True
     return isinstance(element, Text) and element.align != "left"
 

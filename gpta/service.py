@@ -11,23 +11,40 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import logging
 import secrets
 import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__, markdown, reader
-from .blocks import LAYOUTS, PRINT_SIZES, Text, size_of
+from . import __version__, markdown, reader, selections
+from .blocks import (
+    LAYOUTS,
+    PRINT_SIZES,
+    QR_SIDES,
+    QR_SIZES,
+    Heading,
+    KeyValue,
+    Rule,
+    Text,
+    size_of,
+)
 from .config import PAPERS, ConfigStore
-from .errors import InvalidRequest, NotFound
+from .errors import AlreadyRunning, InvalidRequest, ModuleTimeout, NotFound
 from .http import HttpClient
 from .logbus import LogBus
 from .module_api import Module
 from .outputs import OutputStore
-from .printing import Printer, PrinterWriter
+from .printing import (
+    Printer,
+    PrinterDisabled,
+    PrinterRateLimited,
+    PrinterWriter,
+)
 from .printing.jobs import MOVES
 from .registry import describe
 from .renderer import (
@@ -43,6 +60,8 @@ from .runner import ModuleRunner, module_log
 from .scheduler import Scheduler
 from .state import StateStore
 from .storage import Database
+
+log = logging.getLogger("gpta.service")
 
 #: Longest text the Instant tab may print in one job.
 #: Longest Instant text. Like web pages, long text prints whole; this only
@@ -98,6 +117,45 @@ READER_MAX_CHARS = 150_000
 READER_CACHE_SIZE = 8
 #: Printer dots per mm (203 dpi), for paper length estimates.
 DOTS_PER_MM = 8
+
+
+#: The ``module`` of codes made by the Settings tab's selection test; the
+#: host handles their scans itself. Not a valid module id (ids are folders).
+TEST_SELECTIONS = "_test"
+TEST_MAX_CHOICES = 10
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    """What a scanned code led to: the HTTP status and the page to show."""
+
+    status: int
+    state: str
+    heading: str
+    detail: str = ""
+
+
+def _test_options(body: Any) -> dict[str, Any]:
+    """The selection test's settings from a request, validated."""
+    if not isinstance(body, dict):
+        raise InvalidRequest("body must be an object")
+    count = body.get("count", 3)
+    if type(count) is not int or not 1 <= count <= TEST_MAX_CHOICES:
+        raise InvalidRequest(f"count must be between 1 and {TEST_MAX_CHOICES}")
+    hours = body.get("expires_hours", 1)
+    if type(hours) is not int or not 1 <= hours <= selections.MAX_EXPIRES_HOURS:
+        raise InvalidRequest(
+            f"expires_hours must be between 1 and {selections.MAX_EXPIRES_HOURS}"
+        )
+    side, qr = body.get("side", "right"), body.get("qr", "medium")
+    if side not in QR_SIDES:
+        raise InvalidRequest(f"side must be one of {', '.join(QR_SIDES)}")
+    if qr not in QR_SIZES:
+        raise InvalidRequest(f"qr must be one of {', '.join(QR_SIZES)}")
+    flags = {name: body.get(name, True) for name in ("numbered", "rules")}
+    if not all(isinstance(value, bool) for value in flags.values()):
+        raise InvalidRequest("numbered and rules must be true or false")
+    return {"count": count, "expires_hours": hours, "side": side, "qr": qr, **flags}
 
 
 def _confirmed(body: Any) -> bool:
@@ -288,6 +346,154 @@ class Service:
         module_log(f"reader print queued: {image.height // DOTS_PER_MM} mm")
         return {"ok": True, "job": job}
 
+    # -- QR selections -------------------------------------------------
+    def set_server(self, patch: Any) -> dict[str, Any]:
+        """Change the live server settings (``public_url``)."""
+        server = self.config.update_server(patch)
+        module_log("server configuration updated")
+        return {"public_url": server["public_url"]}
+
+    def scan(self, token: str) -> ScanResult:
+        """Act on a scanned selection code and say what happened."""
+        outcome, selection = self.runner.selections.claim(token)
+        if outcome == selections.UNKNOWN:
+            return ScanResult(404, outcome, "Unknown code", "This code is not known.")
+        title = selection["title"]
+        if outcome == selections.EXPIRED:
+            return ScanResult(410, outcome, "Code expired", title)
+        if outcome == selections.REPEAT:
+            return ScanResult(
+                200, outcome, "Already sent", f"{title}: scanned a moment ago."
+            )
+        result = self._run_selection(selection)
+        self.runner.selections.finish(
+            token,
+            f"{result.state}: {result.heading}",
+            ok=result.status < 400,
+        )
+        return dataclasses.replace(
+            result, detail=f"{title}: {result.detail}" if result.detail else title
+        )
+
+    def _run_selection(self, selection: dict[str, Any]) -> ScanResult:
+        module_id = selection["module"]
+        try:
+            if module_id == TEST_SELECTIONS:
+                job = self._print_test_selection(selection)
+            else:
+                job = self.runner.select(module_id, selection["payload"])
+        except PrinterDisabled:
+            return ScanResult(
+                409, "printer_off", "Printer is off", "received, but not printed"
+            )
+        except (PrinterRateLimited, AlreadyRunning) as exc:
+            return ScanResult(429, "busy", "Busy, try again", str(exc))
+        except ModuleTimeout as exc:
+            return ScanResult(504, "timeout", "Timed out", str(exc))
+        except NotFound:
+            return ScanResult(404, "no_module", "Module not installed", module_id)
+        except Exception as exc:
+            if module_id == TEST_SELECTIONS:  # ours: a bug, not a module's
+                log.exception("selection test failed")
+            return ScanResult(502, "failed", "Could not print", str(exc)[:200])
+        if job is None:
+            return ScanResult(200, "skipped", "Nothing to print")
+        if job.get("needs_approval"):
+            return ScanResult(
+                200, "held", "Waiting for approval", "a long print; see the Queue tab"
+            )
+        return ScanResult(200, "queued", "Printing", f"print job {job['id']}")
+
+    def _print_test_selection(self, selection: dict[str, Any]) -> dict[str, Any]:
+        now = datetime.fromtimestamp(self.clock(), UTC)
+        receipt = build_receipt(
+            "Selection test",
+            [
+                Heading("Selection received"),
+                Text(selection["title"], bold=True),
+                KeyValue("Scans of this code", str(selection["use_count"])),
+            ],
+            now=now,
+        )
+        module_log(f"selection test scanned: {selection['title']}")
+        return self.printer.submit(
+            render_image(receipt, self._width_px()), "test", manual=True
+        )
+
+    def selection_test(self, body: Any) -> dict[str, Any]:
+        """Make a sample selection list, as a module would, and return its
+        preview; with ``"print": true``, print it too. Scanning one of its
+        codes prints a short confirmation."""
+        options = _test_options(body)
+        count = options.pop("count")
+        offer = selections.Selections(
+            self.runner.selections,
+            TEST_SELECTIONS,
+            self.config.snapshot()["server"]["public_url"],
+        )
+        try:
+            items = offer.offer(
+                [
+                    selections.Choice(
+                        f"Test item {number}",
+                        {"item": number},
+                        "Scan to print a confirmation",
+                    )
+                    for number in range(1, count + 1)
+                ],
+                **options,
+            )
+        except selections.SelectionError as exc:
+            raise InvalidRequest(str(exc)) from exc
+        now = datetime.fromtimestamp(self.clock(), UTC)
+        receipt = build_receipt(
+            "Selection test",
+            [Text("Scan a code to choose that item.", size="small"), Rule(), *items],
+            now=now,
+        )
+        image = render_image(receipt, self._width_px())
+        result: dict[str, Any] = {
+            "png": _png_url(image),
+            "paper_mm": round(image.height / DOTS_PER_MM),
+            "lines": render_text(receipt, self._columns()),
+        }
+        if isinstance(body, dict) and body.get("print") is True:
+            result["job"] = self.printer.submit(image, "test", manual=True)
+            module_log(f"selection test list queued: {count} item(s)")
+        return {**result, **self.selections_list()}
+
+    def selections_list(self) -> dict[str, Any]:
+        """The newest codes and how they have been used, for diagnostics.
+        Tokens are credentials; like the rest of the API this is only for
+        the operator."""
+        public_url = self.config.snapshot()["server"]["public_url"]
+        now = self.clock()
+
+        def iso(ts: float | None) -> str | None:
+            if ts is None:
+                return None
+            return datetime.fromtimestamp(ts, UTC).isoformat(timespec="seconds")
+
+        return {
+            "public_url": public_url,
+            "debounce_seconds": selections.DEBOUNCE_SECONDS,
+            "selections": [
+                {
+                    "token": item["token"],
+                    "path": selections.SCAN_PATH + item["token"],
+                    "module": item["module"],
+                    "title": item["title"],
+                    "created_at": iso(item["created_at"]),
+                    "expires_at": iso(item["expires_at"]),
+                    "expired": item["expires_at"] <= now,
+                    "use_count": item["use_count"],
+                    "last_used_at": iso(item["last_used_at"]),
+                    "last_result": item["last_result"],
+                }
+                for item in self.runner.selections.recent()
+            ],
+        }
+
     # -- print queue ---------------------------------------------------
     def queue(self) -> dict[str, Any]:
         return self.printer.queue()
@@ -339,6 +545,9 @@ class Service:
     def _width_px(self) -> int:
         return _paper(self.config.snapshot())["width_px"]
 
+    def _columns(self) -> int:
+        return _paper(self.config.snapshot())["columns"]
+
     # -- snapshots -----------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
         config = self.config.snapshot()
@@ -347,6 +556,7 @@ class Service:
                 "version": __version__,
                 "host": self.bound_host or config["server"]["host"],
                 "port": self.bound_port or config["server"]["port"],
+                "public_url": config["server"]["public_url"],
                 "uptime_seconds": max(0, int(self.monotonic() - self._started_mono)),
                 **self.scheduler.status(),
                 "config_path": str(self.config.path),

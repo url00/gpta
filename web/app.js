@@ -567,6 +567,7 @@ async function refreshLogs() {
 function updateAll() {
   updateServer();
   updatePrinter();
+  updateSettings();
 
   const seen = new Set();
   for (const module of state.modules) {
@@ -594,6 +595,7 @@ async function refresh() {
     state = await api("/api/state");
     queue = await api("/api/queue");
     await refreshLogs();
+    await refreshSelections();
     updateAll();
   } catch (error) {
     serverStatus.textContent = "server unreachable";
@@ -1013,6 +1015,102 @@ function bindSimulator() {
   bindReceiptImage();
 }
 
+// ---- settings: public address and the QR selection test ---------------
+const selectImg = document.getElementById("select-img");
+const selectEmpty = document.getElementById("select-empty");
+let selectView = "";     // what the code list currently shows
+
+function updateSettings() {
+  setValueIfIdle(document.getElementById("server-public-url"), state.server.public_url);
+}
+
+function dayTime(iso) {
+  return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function selectBody(print) {
+  return {
+    count: Number(document.getElementById("select-count").value),
+    side: document.getElementById("select-side").value,
+    qr: document.getElementById("select-qr").value,
+    expires_hours: Number(document.getElementById("select-hours").value),
+    numbered: document.getElementById("select-numbered").checked,
+    rules: document.getElementById("select-rules").checked,
+    print,
+  };
+}
+
+function showSelections(data) {
+  document.getElementById("select-debounce").textContent = data.debounce_seconds;
+  const view = JSON.stringify(data.selections);
+  if (view === selectView) return;
+  selectView = view;
+  const list = document.getElementById("select-list");
+  list.replaceChildren();
+  if (!data.selections.length) {
+    list.append(make("li", "empty", "No codes yet."));
+    return;
+  }
+  for (const item of data.selections) {
+    const row = make("li", item.expired ? "expired" : "");
+    const what = make("span", "job-what");
+    what.append(make("b", "", item.title));
+    const bits = [
+      item.module === "_test" ? "Selection test" : sourceName(item.module),
+      item.expired ? "expired" : `works until ${dayTime(item.expires_at)}`,
+      `${item.use_count} scan${item.use_count === 1 ? "" : "s"}`,
+    ];
+    if (item.last_used_at) bits.push(`last ${shortTime(item.last_used_at)}`);
+    if (item.last_result) bits.push(item.last_result);
+    what.append(make("span", "job-meta", bits.join(" · ")));
+    row.append(what);
+    const open = make("a", "", "Open");
+    open.href = item.path;
+    open.target = "_blank";
+    open.rel = "noopener";
+    open.title = "Act as a scan of this code";
+    const actions = make("span", "job-actions");
+    actions.append(open);
+    row.append(actions);
+    list.append(row);
+  }
+}
+
+async function refreshSelections() {
+  if (document.getElementById("panel-settings").hidden) return;
+  showSelections(await api("/api/selections"));
+}
+
+function bindSettings() {
+  const save = document.getElementById("server-save");
+  save.addEventListener("click", () => {
+    busy(save, async () => {
+      const url = document.getElementById("server-public-url");
+      const result = await api("/api/server", {
+        method: "PATCH",
+        body: { public_url: url.value.trim() },
+      });
+      url.value = result.server.public_url;
+      showBanner(result.server.public_url ? "Public address saved." : "Public address cleared.");
+      await refresh();
+    });
+  });
+  const run = (button, print) => {
+    button.addEventListener("click", () => {
+      busy(button, async () => {
+        const result = await api("/api/selections/test", { method: "POST", body: selectBody(print) });
+        selectImg.src = result.png;
+        selectImg.hidden = false;
+        selectEmpty.hidden = true;
+        showSelections(result);
+        if (result.job) showBanner(queuedNotice(result.job));
+      });
+    });
+  };
+  run(document.getElementById("select-preview"), false);
+  run(document.getElementById("select-print"), true);
+}
+
 function bindLogs() {
   logFilter.addEventListener("change", renderLogs);
 }
@@ -1024,6 +1122,7 @@ async function init() {
   bindPrinterControls();
   bindQueue();
   bindSimulator();
+  bindSettings();
   bindLogs();
   await refresh();
   setInterval(refresh, 2000);

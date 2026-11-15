@@ -24,6 +24,7 @@
       <button type="button" role="tab" id="tab-modules" data-tab="modules" aria-controls="panel-modules">Modules</button>
       <button type="button" role="tab" id="tab-queue" data-tab="queue" aria-controls="panel-queue">Queue</button>
       <button type="button" role="tab" id="tab-printer" data-tab="printer" aria-controls="panel-printer">Printer</button>
+      <button type="button" role="tab" id="tab-settings" data-tab="settings" aria-controls="panel-settings">Settings</button>
       <button type="button" role="tab" id="tab-about" data-tab="about" aria-controls="panel-about">About</button>
     </nav>
   </header>
@@ -169,6 +170,57 @@
 
       <h3>Recent</h3>
       <ul id="queue-history" class="jobs"></ul>
+    </section>
+
+    <section id="panel-settings" class="panel settings-panel" role="tabpanel" aria-labelledby="tab-settings" tabindex="0" hidden>
+      <h2>Settings</h2>
+      <h3>Public address</h3>
+      <p class="desc">Where a phone reaches this server, e.g. <code>https://gpta.example.com</code>. Printed QR selection codes link to it, so modules cannot make selection lists until it is set.</p>
+      <div class="printer-form">
+        <label class="field">Public URL
+          <input id="server-public-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://">
+        </label>
+      </div>
+      <div class="actions">
+        <button id="server-save" type="button">Save address</button>
+      </div>
+
+      <h3>QR selection test</h3>
+      <p class="desc">Makes a sample list the way a module does: each item has a code that, when scanned, tells this server which item was chosen. Scanning a test code prints a short confirmation. A second scan of the same code within <span id="select-debounce">30</span> seconds is ignored.</p>
+      <div class="printer-form">
+        <label class="field">Items
+          <input id="select-count" type="number" min="1" max="10" step="1" value="3" autocomplete="off">
+        </label>
+        <label class="field">Code side
+          <select id="select-side" autocomplete="off">
+            <option value="right">Right</option>
+            <option value="left">Left</option>
+          </select>
+        </label>
+        <label class="field">Code size
+          <select id="select-qr" autocomplete="off">
+            <option value="small">Small (15 mm)</option>
+            <option value="medium" selected>Medium (20 mm)</option>
+            <option value="large">Large (25 mm)</option>
+          </select>
+        </label>
+        <label class="field">Codes work for (hours)
+          <input id="select-hours" type="number" min="1" max="2160" step="1" value="1" autocomplete="off">
+        </label>
+        <label class="check"><input type="checkbox" id="select-numbered" checked autocomplete="off"> Numbered</label>
+        <label class="check"><input type="checkbox" id="select-rules" checked autocomplete="off"> Rules between items</label>
+      </div>
+      <div class="actions">
+        <button id="select-preview" type="button" class="secondary">Preview</button>
+        <button id="select-print" type="button">Print test list</button>
+      </div>
+      <div class="paper select-paper">
+        <img id="select-img" alt="Selection test preview" hidden>
+        <p id="select-empty" class="receipt-empty">Preview or print a test list to see it here.</p>
+      </div>
+      <h3>Recent codes</h3>
+      <p class="desc">Codes from every module, newest first. Open acts as a scan from this browser.</p>
+      <ul id="select-list" class="jobs"></ul>
     </section>
 
     <section id="panel-printer" class="panel printer-panel" role="tabpanel" aria-labelledby="tab-printer" tabindex="0" hidden>

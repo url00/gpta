@@ -102,6 +102,7 @@ wrapped to the paper width; don't pre-wrap or pad it.
 | `BarChart(bars, title="", max_value=None)` | `tuple[Bar, ...]`, `str`, number | One row per bar: label, black bar, value. Bars scale to `max_value` (default: the largest value) |
 | `Bar(label, value, display="")` | `str`, number, `str` | `display` replaces the printed number, e.g. `"1.2k"` |
 | `QrCode(data)` | `str`, up to 1000 characters | A centred QR code, about 25 mm wide (larger for long data), e.g. a link to the full story |
+| `QrItem(data, title, note="", label="", side="right", qr="medium")` | `side`: `left`, `right`; `qr`: `small`, `medium`, `large` (about 15, 20, 25 mm) | A list row: a QR code for `data` on one side, with `label` and bold `title` beside it and `note` in small text underneath. Always full width, also in columns. For codes that select something on this server, use `ctx.selections` (below) rather than building these by hand |
 
 `BarChart` also accepts `(label, value)` tuples in place of `Bar`s. Blocks are
 frozen dataclasses with plain fields, so the host can save them as JSON and
@@ -112,6 +113,69 @@ run.
 
 `Text` also takes `bold_spans`: `(start, end)` character ranges of the text
 to print in bold, end exclusive, e.g. `Text("Due today", bold_spans=((4, 9),))`.
+
+## Selection lists (scan to choose)
+
+A module can print a list where each item has a QR code, and act when one is
+scanned: print the chosen article, mark a task done, and so on.
+`ctx.selections.offer()` turns choices into blocks, and `on_select()`
+receives the chosen one's payload:
+
+```python
+from gpta.module_api import Choice, Heading, Module, markdown_blocks
+
+
+class StoriesModule(Module):
+    ...
+
+    def fetch(self, ctx):
+        stories = load_stories(ctx)
+        return [
+            Heading("Top stories"),
+            *ctx.selections.offer(
+                [
+                    Choice(s["title"], {"id": s["id"]}, note=f"{s['score']} points")
+                    for s in stories
+                ],
+                expires_hours=72,
+            ),
+        ]
+
+    def on_select(self, ctx, payload):
+        story = load_story(ctx, payload["id"])
+        return [Heading(story["title"]), *markdown_blocks(story["text"])]
+```
+
+- **`Choice(title, payload=None, note="")`**: `title` prints beside the code
+  and `note` under it. `payload` is any JSON value up to 4,000 bytes; store an
+  id, not the content. A `(title, payload[, note])` tuple works too.
+- **`offer(choices, *, expires_hours=168, numbered=True, side="right",
+  qr="medium", rules=True)`** returns `QrItem` blocks (with `Rule`s between
+  them when `rules` is on). At most 50 choices per call; a module's newest
+  500 codes are kept. `expires_hours` is 1 to 2160 (90 days).
+- **`on_select(ctx, payload)`** returns blocks or a `Document`, like
+  `fetch()`, and the host prints them under the module's name. `ctx.trigger`
+  is `"select"`. `max_chars` is not applied (a chosen article prints whole,
+  up to 150,000 characters, and a long print waits for approval like any
+  other). `ctx.store` writes are saved if it succeeds. Raise `Skip` to print
+  nothing. It runs under the same timeout as `fetch()`, separately from the
+  module's scheduled runs: it does not change the receipt shown in the
+  console or count towards backoff. It may call `ctx.selections.offer()`
+  itself, for menus that lead to menus.
+- A code can be scanned again until it expires; a second scan within 30
+  seconds is ignored (phones often fetch a link before opening it), unless
+  the first one failed.
+- Codes link to `server.public_url` (Settings tab). Without it `offer()`
+  raises `SelectionError` and the run fails with a message saying so; check
+  `ctx.selections.available` to fall back to a plain list instead.
+- The payload is never in the code, only a random token, so it cannot be
+  forged or read from the paper. Treat `payload` as your own data, but
+  remember the item may have changed or gone since it was printed.
+- In tests, the default `ModuleContext` has a working in-memory
+  `ctx.selections` whose links start with `http://gpta.test/s/`.
+
+The Settings tab has a test screen that prints a sample list and shows every
+live code with its scans and last result.
 
 ## Markdown
 

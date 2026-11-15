@@ -244,3 +244,37 @@ resolved at run time in this order: the module's own setting on its card
 Rationale: paper and eyesight are the operator's, so their explicit choice
 must win over a module author's; a module's request still beats a global
 default, because the author knows the content.
+
+## 13. QR selection lists
+
+**Decision (2026-11-15):** selecting a printed item by scanning its QR code
+is a host feature (`gpta/selections.py`, `ctx.selections`,
+`Module.on_select`), not something each module builds.
+
+- **The code holds a random token, not the action.** 96 bits, looked up in
+  the `selections` table of `data/gpta.db`. The payload stays on the server,
+  so codes are short (small, quick to scan), cannot be forged, and reveal
+  nothing. A signed payload in the URL would need no table but makes codes
+  large and needs a key to manage.
+- **A plain `GET /s/<token>` acts.** A phone camera opens links; a confirm
+  page would cost a tap per selection. This is the one state-changing GET,
+  so it is narrow: it can only trigger the action the server itself stored
+  for that token, `HEAD` is refused, and a repeat within 30 seconds is
+  ignored, which absorbs link pre-fetching. The print queue's own limits
+  (50 waiting jobs, long-print approval, pause) still apply.
+- **Codes expire (7 days by default, set per list) and are reusable**, so a
+  receipt on the fridge keeps working for a while. Expired codes are purged
+  when new ones are made; each module keeps its newest 500.
+- **`server.public_url` is required** and is the base of every link. The
+  server does not guess it from a request, since the console is usually
+  opened on `localhost`. Its host is accepted by the `Host` check.
+- **Selections run beside scheduled runs,** not through them: no
+  single-flight claim, no backoff, and the module's receipt in the console is
+  left alone. At most 4 handlers run at once.
+- Authentication stays where decision 4 put it. Behind an authenticating
+  tunnel the phone signs in once; the token alone is not treated as enough
+  to skip that layer.
+
+**Revisit when** a selection needs input beyond "this one" (a quantity, a
+text reply): that wants a small form page and a POST, not more GET routes.
+

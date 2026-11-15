@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -24,12 +25,18 @@ from .printing import (
     PrinterRateLimited,
 )
 from .renderer import Receipt, build_receipt, render_image
+from .selections import Selections, SelectionStore
 from .state import StateStore
 from .storage import Database, ModuleStore
 
 log = logging.getLogger("gpta.runner")
 
 MAX_EMITS_PER_RUN = 100
+#: Longest receipt a scanned selection may print: like web pages, a chosen
+#: article prints whole, so this only guards against runaway output.
+SELECT_MAX_CHARS = 150_000
+#: Selection handlers running at once, counting timed-out ones still alive.
+MAX_SELECT_WORKERS = 4
 MAX_BACKOFF_INTERVAL = 604800
 LOG_LEVELS = {
     "debug": logging.DEBUG,
@@ -49,6 +56,14 @@ def module_log(message: str, level: str = "info", module: str | None = None) -> 
         message,
         extra={"gpta_module": module},
     )
+
+
+class _Abandoned(ModuleTimeout):
+    """A timed-out call, with the worker thread that is still running it."""
+
+    def __init__(self, message: str, worker: threading.Thread):
+        super().__init__(message)
+        self.worker = worker
 
 
 @dataclass
@@ -78,6 +93,7 @@ class RunTicket:
     cfg: dict[str, Any]
     width_px: int
     printer: dict[str, Any]
+    public_url: str = ""
 
 
 def _styled(content: Any, style: dict[str, str], printer: dict[str, Any]) -> Any:
@@ -143,6 +159,8 @@ class ModuleRunner:
         self.clock = clock
         self.monotonic = monotonic
         self.cache = Cache(config.data_dir / "cache")
+        self.selections = SelectionStore(self.db, clock)
+        self._select_workers: list[threading.Thread] = []
         self._lock = threading.RLock()
         self._runtime = {module_id: ModuleRuntime() for module_id in registry}
         self._stuck: dict[str, threading.Thread] = {}
@@ -190,6 +208,98 @@ class ModuleRunner:
             settings["modules"][module_id],
             PAPERS[settings["printer"]["paper"]]["width_px"],
             settings["printer"],
+            settings["server"]["public_url"],
+        )
+
+    def _context(
+        self,
+        module_id: str,
+        cfg: dict[str, Any],
+        now: datetime,
+        store: ModuleStore,
+        trigger: str,
+        public_url: str,
+    ) -> ModuleContext:
+        return ModuleContext(
+            module_id=module_id,
+            limits=dict(cfg["limits"]),
+            options=dict(cfg["options"]),
+            data_dir=self.config.data_dir,
+            now=now,
+            http=self.http,
+            cache=self.cache,
+            log=self._make_emitter(module_id),
+            store=store,
+            trigger=trigger,
+            selections=Selections(self.selections, module_id, public_url),
+        )
+
+    # -- selections ----------------------------------------------------
+    def select(self, module_id: str, payload: Any) -> dict[str, Any] | None:
+        """Hand a scanned selection to its module's ``on_select()`` and
+        queue what it returns for printing. Returns the print job, or None
+        when the module raised :class:`Skip`.
+
+        Independent of the module's scheduled runs (it does not take the
+        single-flight claim or count towards backoff), but bounded: at most
+        :data:`MAX_SELECT_WORKERS` handlers at once. Raises whatever the
+        handler or the printer raises; nothing is saved or printed then.
+        """
+        module = self.registry.get(module_id)
+        if module is None:
+            raise NotFound(f"unknown module: {module_id}")
+        settings = self.config.snapshot()
+        cfg = settings["modules"][module_id]
+        module_log("selection started", "info", module_id)
+        store = ModuleStore(self.db, module_id)
+        try:
+            now = self._now()
+            ctx = self._context(
+                module_id, cfg, now, store, "select", settings["server"]["public_url"]
+            )
+            try:
+                content = self._select_with_timeout(module, ctx, payload)
+            except Skip as exc:
+                store.commit()
+                module_log(
+                    f"selection skipped: {str(exc) or 'nothing to print'}",
+                    "info",
+                    module_id,
+                )
+                return None
+            if not content or (isinstance(content, Document) and not content.elements):
+                raise ValueError("the selection produced nothing to print")
+            receipt = build_receipt(
+                module.name,
+                _styled(content, cfg["style"], settings["printer"]),
+                max_chars=SELECT_MAX_CHARS,
+                now=now,
+            )
+            image = render_image(
+                receipt, PAPERS[settings["printer"]["paper"]]["width_px"]
+            )
+            # A scan is a person asking, like Run now: no minimum spacing.
+            job = self.printer.submit(image, module_id, manual=True)
+            store.commit()
+        except Exception as exc:
+            module_log(f"selection failed: {exc}", "error", module_id)
+            raise
+        finally:
+            store.discard()
+        module_log(f"selection queued as job {job['id']}", "info", module_id)
+        return job
+
+    def _select_with_timeout(
+        self, module: Module, ctx: ModuleContext, payload: Any
+    ) -> Any:
+        with self._lock:
+            self._select_workers = [w for w in self._select_workers if w.is_alive()]
+            if len(self._select_workers) >= MAX_SELECT_WORKERS:
+                raise AlreadyRunning("too many selections are being handled")
+        return self._call_with_timeout(
+            lambda: module.on_select(ctx, payload),
+            f"gpta-select-{module.id}",
+            self._select_workers,
         )
 
     def execute(self, ticket: RunTicket, trigger: str) -> dict[str, Any]:
@@ -205,18 +315,7 @@ class ModuleRunner:
 
         try:
             now = self._now()
-            ctx = ModuleContext(
-                module_id=module_id,
-                limits=dict(cfg["limits"]),
-                options=dict(cfg["options"]),
-                data_dir=self.config.data_dir,
-                now=now,
-                http=self.http,
-                cache=self.cache,
-                log=self._make_emitter(module_id),
-                store=store,
-                trigger=trigger,
-            )
+            ctx = self._context(module_id, cfg, now, store, trigger, ticket.public_url)
             content = self._fetch_with_timeout(module, ctx)
             if not content or (isinstance(content, Document) and not content.elements):
                 content = [Block("No content", ("No items available.",))]
@@ -333,25 +432,42 @@ class ModuleRunner:
             runtime.print_skipped = skipped
 
     def _fetch_with_timeout(self, module: Module, ctx: ModuleContext) -> Any:
+        try:
+            return self._call_with_timeout(
+                lambda: module.fetch(ctx), f"gpta-fetch-{module.id}"
+            )
+        except _Abandoned as exc:
+            with self._lock:
+                self._stuck[module.id] = exc.worker
+            raise ModuleTimeout(str(exc)) from None
+
+    def _call_with_timeout(
+        self,
+        call: Callable[[], Any],
+        name: str,
+        workers: list[threading.Thread] | None = None,
+    ) -> Any:
+        """Run ``call`` on a worker thread for at most the fetch timeout.
+        The worker is added to ``workers`` (under the runner lock) while it
+        runs. Raises :class:`_Abandoned` when it does not finish in time."""
         holder: dict[str, Any] = {}
         done = threading.Event()
 
         def target() -> None:
             try:
-                holder["result"] = module.fetch(ctx)
+                holder["result"] = call()
             except Exception as exc:
                 holder["error"] = exc
             finally:
                 done.set()
 
-        worker = threading.Thread(
-            target=target, name=f"gpta-fetch-{module.id}", daemon=True
-        )
+        worker = threading.Thread(target=target, name=name, daemon=True)
+        if workers is not None:
+            with self._lock:
+                workers.append(worker)
         worker.start()
         if not done.wait(self.fetch_timeout):
-            with self._lock:
-                self._stuck[module.id] = worker
-            raise ModuleTimeout(f"timeout after {self.fetch_timeout:g}s")
+            raise _Abandoned(f"timeout after {self.fetch_timeout:g}s", worker)
         if "error" in holder:
             raise holder["error"]
         return holder.get("result")
