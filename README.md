@@ -81,7 +81,7 @@ next start and forget its saved state.
 | Module | Interval | Limits | Options |
 |---|---|---|---|
 | `affirmations` | 1 day | 500 chars | include date |
-| `hackernews` | 7 days | 10 items, 3000 chars | window days, min score, scan limit (60), only text articles, shortest article, paper estimates |
+| `hackernews` | 7 days | 10 items, 3000 chars | window days, min score, scan limit (60), only text articles, shortest article, paper estimates, comments (threads, replies, longest reply) |
 | `google_tasks` | 5 minutes | 30 tasks per list, 3000 chars | morning time, time zone, list, completed today, credentials file |
 | `google_calendar` | 5 minutes | 30 events, 3000 chars | morning time, time zone, calendar, 12/24-hour, credentials file |
 | `weather` | 5 minutes | 3000 chars | morning time, time zone, latitude, longitude, units, 12/24-hour, alerts |
@@ -99,8 +99,17 @@ next start and forget its saved state.
     in the title. It reads candidate pages best score first until enough
     qualify, for at most a minute; raise "Stories to scan" if the list
     comes up short. The log says how many were skipped and why.
-  - Each row says roughly how much paper the article would use with the
-    module's current size and layout ("Show paper estimates").
+  - With "Print comments too" on (the default) the story's comments print
+    as a second job after the article: the first 5 top-level threads, with
+    up to 3 replies under each comment for two levels, in Hacker News's
+    order and indented by depth. Top-level comments print whole; replies
+    over 600 characters are cut, followed by a small QR code that opens
+    that comment on a phone (it does not print anything). Each count is an
+    option.
+  - Each row says roughly how much paper the article, and separately the
+    comments, would use with the module's current size and layout ("Show
+    paper estimates"). The comments estimate costs one request per comment
+    shown, for every listed story.
 - **Google Tasks** checks your tasks every 5 minutes. The first check at or
   after the morning time (08:00, server-local unless a time zone is set)
   prints the day's list; after that a new list prints only when something

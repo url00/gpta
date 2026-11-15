@@ -224,11 +224,15 @@ class Module:
     def fetch(self, ctx: ModuleContext) -> list[Element] | Document:  # pragma: no cover
         raise NotImplementedError
 
-    def on_select(self, ctx: ModuleContext, payload: Any) -> list[Element] | Document:
+    def on_select(
+        self, ctx: ModuleContext, payload: Any
+    ) -> list[Element] | Document | list[Document]:
         """Called when a code from ``ctx.selections.offer()`` is scanned,
         with that choice's ``payload``. Returns what to print, like
         ``fetch()``; the host adds the header and footer but does not apply
-        ``max_chars``. Raise :class:`Skip` to print nothing."""
+        ``max_chars``. A list of :class:`Document`\\ s prints each as its own
+        job, in order (an article, then its comments). Raise :class:`Skip`
+        to print nothing."""
         raise NotImplementedError(f"{self.id} does not handle selections")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

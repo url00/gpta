@@ -379,9 +379,9 @@ class Service:
         module_id = selection["module"]
         try:
             if module_id == TEST_SELECTIONS:
-                job = self._print_test_selection(selection)
+                jobs = [self._print_test_selection(selection)]
             else:
-                job = self.runner.select(module_id, selection["payload"])
+                jobs = self.runner.select(module_id, selection["payload"])
         except PrinterDisabled:
             return ScanResult(
                 409, "printer_off", "Printer is off", "received, but not printed"
@@ -396,13 +396,15 @@ class Service:
             if module_id == TEST_SELECTIONS:  # ours: a bug, not a module's
                 log.exception("selection test failed")
             return ScanResult(502, "failed", "Could not print", str(exc)[:200])
-        if job is None:
+        if not jobs:
             return ScanResult(200, "skipped", "Nothing to print")
-        if job.get("needs_approval"):
+        numbers = ", ".join(str(job["id"]) for job in jobs)
+        what = f"print job {numbers}" if len(jobs) == 1 else f"print jobs {numbers}"
+        if any(job.get("needs_approval") for job in jobs):
             return ScanResult(
-                200, "held", "Waiting for approval", "a long print; see the Queue tab"
+                200, "held", "Waiting for approval", f"{what}: long; see the Queue tab"
             )
-        return ScanResult(200, "queued", "Printing", f"print job {job['id']}")
+        return ScanResult(200, "queued", "Printing", what)
 
     def _print_test_selection(self, selection: dict[str, Any]) -> dict[str, Any]:
         now = datetime.fromtimestamp(self.clock(), UTC)

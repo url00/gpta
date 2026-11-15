@@ -13,10 +13,12 @@ from gpta.module_api import (
     BarChart,
     Cache,
     Checkbox,
+    Document,
     FetchError,
     Heading,
     KeyValue,
     ModuleContext,
+    QrCode,
     QrItem,
     Reading,
     Rule,
@@ -24,7 +26,7 @@ from gpta.module_api import (
     Text,
 )
 from gpta.registry import discover
-from gpta.renderer import build_receipt, render_image
+from gpta.renderer import build_receipt, render_image, render_text
 
 # Use the module objects the registry loaded, rather than importing
 # modules.<id>.module a second time under another name.
@@ -173,6 +175,7 @@ class ModuleTests(unittest.TestCase):
                 "scan_limit": 100,
                 "text_only": False,
                 "min_words": 400,
+                "comments": False,
                 **options,
             },
         )
@@ -274,6 +277,136 @@ class ModuleTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(FetchError, problem):
                     module.on_select(ctx, payload)
+
+    def hn_comment(self, number, by, text, kids=(), **extra):
+        return {
+            "id": number,
+            "type": "comment",
+            "by": by,
+            "text": text,
+            "time": int(NOW.timestamp()) - 3 * 3600,
+            "kids": list(kids),
+            **extra,
+        }
+
+    def hn_thread(self):
+        """Story 1 with a small tree: 10/11/12 on top (11 is dead), replies
+        20-23 under 10, and 30 under 20, which has a reply of its own."""
+        c = self.hn_comment
+        long = "word " * 200
+        return {
+            **self.HN_STORIES,
+            1: {**self.HN_STORIES[1], "kids": [10, 11, 12, 13], "descendants": 9},
+            10: c(
+                10, "ann", "Top <i>level</i>.<p>Second &amp; last.", [20, 21, 22, 23]
+            ),
+            11: c(11, "ghost", "gone", dead=True),
+            12: c(12, "cat", long),
+            13: c(13, "dan", "fourth thread"),
+            20: c(20, "bob", "First reply", [30]),
+            21: c(21, "eve", long + '<p><a href="https://x.example/long">x.ex...</a>'),
+            22: c(22, "fay", "<pre><code>a = 1\n  b = 2</code></pre>"),
+            23: c(23, "gus", "not shown"),
+            30: c(30, "hal", "Deep reply", [40, 41]),
+        }
+
+    def test_hackernews_comment_text(self):
+        self.assertEqual(
+            HN.paragraphs(
+                "A &gt; B <i>it</i>"
+                '<p><a href="https://x.example/a?b=1&amp;c=2" rel="nofollow">x...</a>'
+                "<p><pre><code>x\n  y</code></pre>"
+            ),
+            [
+                ("A > B it", False),
+                ("https://x.example/a?b=1&c=2", False),
+                ("x\n  y", True),
+            ],
+        )
+        self.assertEqual(HN.paragraphs(None), [])
+        parts = [("one two three", False), ("four five", False)]
+        self.assertEqual(HN.shorten(parts, 0), (parts, False))
+        self.assertEqual(HN.shorten(parts, 100), (parts, False))
+        self.assertEqual(HN.shorten(parts, 9), ([("one two…", False)], True))
+        self.assertEqual(
+            HN.shorten(parts, 18), ([("one two three", False), ("four…", False)], True)
+        )
+        self.assertEqual(
+            [HN.age(100000, 100000 - s) for s in (59, 3600, 47 * 3600, 49 * 3600)],
+            ["0m", "1h", "47h", "2d"],
+        )
+
+    def test_hackernews_comments_print_as_a_second_job(self):
+        module = self.modules["hackernews"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self.hn_ctx(
+                tmp,
+                self.hn_thread(),
+                comments=True,
+                comment_threads=2,
+                comment_replies=3,
+                reply_chars=600,
+            )
+            parts = module.on_select(ctx, {"id": 1})
+            self.assertEqual([type(part) for part in parts], [Document, Document])
+            self.assertEqual(len(parts[0].elements), 42)  # the article
+            blocks = parts[1].elements
+            self.assertEqual(text_of(blocks[0]), "One")
+            self.assertIn("first 2 threads of 9 comments", text_of(blocks[1]))
+            self.assertEqual(blocks[2], QrCode(HN.DISCUSSION.format(1)))
+            body = blocks[4:]
+            shown = [
+                (b.indent, text_of(b).split("\n")[0][:14])
+                for b in body
+                if not isinstance(b, Rule)
+            ]
+            self.assertEqual(
+                shown,
+                [
+                    (0, "ann · 3h"),
+                    (0, "Second & last."),
+                    (1, "bob · 3h"),
+                    (2, "hal · 3h"),
+                    (3, "+ 2 more repli"),
+                    (1, "eve · 3h"),
+                    (1, HN.CUT_NOTE[:14]),
+                    (1, "fay · 3h"),
+                    (1, "a = 1"),
+                    (1, "+ 1 more reply"),
+                    (0, "cat · 3h"),  # the dead comment's place is taken
+                ],
+            )
+            ann = body[0]
+            self.assertEqual(ann.text, "ann · 3h\nTop level.")
+            self.assertEqual(ann.bold_spans, ((0, 8),))
+            # A long reply is cut, with a code that links to it (not a print).
+            eve = next(b for b in body if text_of(b).startswith("eve"))
+            self.assertTrue(eve.text.endswith("…"))
+            self.assertLess(len(eve.text), 620)
+            cut = next(b for b in body if isinstance(b, QrItem))
+            self.assertEqual(cut.data, HN.DISCUSSION.format(21))
+            # A long top-level comment prints whole.
+            cat = next(b for b in body if text_of(b).startswith("cat"))
+            self.assertGreater(len(cat.text), 900)
+            # Threads are separated by a rule, and it all renders.
+            self.assertEqual(sum(isinstance(b, Rule) for b in body), 1)
+            lines = render_text(build_receipt("HN", list(blocks)), 48)
+            self.assertIn("| | hal · 3h", lines)
+            for width in (576, 384):
+                render_image(build_receipt("HN", list(blocks)), width)
+
+            # The list says what both jobs would use.
+            notes = [b.note for b in module.fetch(ctx) if isinstance(b, QrItem)]
+            self.assertRegex(
+                notes[1], r"article about \d\.\d m · comments about \d+ cm$"
+            )
+            self.assertTrue(notes[0].endswith("article about 5 cm · no comments"))
+            self.assertTrue(notes[2].endswith("article length unknown · no comments"))
+
+            # No comments, or comments off: just the article, as one job.
+            self.assertIsInstance(module.on_select(ctx, {"id": 2}), list)
+            off = self.hn_ctx(tmp, self.hn_thread())
+            self.assertEqual(len(module.on_select(off, {"id": 1})), 42)
 
     def test_hackernews_paper_length_wording(self):
         self.assertEqual(HN.paper_length(12), "about 5 cm")

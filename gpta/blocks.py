@@ -15,6 +15,16 @@ from dataclasses import dataclass, field, fields
 from typing import Any, ClassVar
 
 ALIGNS = ("left", "center", "right")
+#: Deepest ``indent`` a block may have (levels, each drawn with a bar).
+MAX_INDENT = 4
+
+
+def _indent(value: Any, name: str) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_INDENT:
+        raise ValueError(f"{name} must be a whole number from 0 to {MAX_INDENT}")
+    return value
+
+
 SIZES = ("small", "body", "large", "huge")
 
 #: Page layouts: body text in one, two or three columns.
@@ -87,7 +97,9 @@ class Text:
     """A wrapped paragraph. ``size`` is small, body, large, or huge.
 
     ``bold_spans`` sets parts of the text in bold: ``(start, end)`` character
-    ranges, end exclusive, like slices of ``text``.
+    ranges, end exclusive, like slices of ``text``. ``indent`` moves the
+    text in by that many levels, each marked with a vertical bar down the
+    left, for replies and other nested text.
     """
 
     kind: ClassVar[str] = "text"
@@ -97,9 +109,11 @@ class Text:
     bold: bool = False
     align: str = "left"
     bold_spans: tuple[tuple[int, int], ...] = ()
+    indent: int = 0
 
     def __post_init__(self) -> None:
         _str(self.text, "Text.text")
+        _indent(self.indent, "Text.indent")
         _choice(self.size, "Text.size", SIZES)
         _choice(self.align, "Text.align", ALIGNS)
         if not isinstance(self.bold, bool):
@@ -234,7 +248,8 @@ class QrItem:
 
     ``title`` prints bold, with ``label`` (a number, say) before it and
     ``note`` in small text underneath. ``side`` is the code's side of the
-    paper and ``qr`` its size, one of :data:`QR_SIZES`.
+    paper and ``qr`` its size, one of :data:`QR_SIZES`. ``indent`` is as for
+    :class:`Text`.
     """
 
     kind: ClassVar[str] = "qr_item"
@@ -245,8 +260,10 @@ class QrItem:
     label: str = ""
     side: str = "right"
     qr: str = "medium"
+    indent: int = 0
 
     def __post_init__(self) -> None:
+        _indent(self.indent, "QrItem.indent")
         _str(self.data, "QrItem.data")
         if not self.data:
             raise ValueError("QrItem.data must not be empty")
@@ -373,6 +390,8 @@ def to_dict(element: Element) -> dict[str, Any]:
             if not value:
                 continue  # plain text stays as it was saved before spans
             value = [list(span) for span in value]
+        elif item.name == "indent" and not value:
+            continue  # as blocks were saved before they could be indented
         data[item.name] = value
     return data
 

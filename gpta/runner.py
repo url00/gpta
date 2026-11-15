@@ -39,6 +39,8 @@ MAX_EMITS_PER_RUN = 100
 SELECT_MAX_CHARS = 150_000
 #: Selection handlers running at once, counting timed-out ones still alive.
 MAX_SELECT_WORKERS = 4
+#: Separate prints one selection may ask for.
+MAX_SELECT_PARTS = 5
 #: Printer dots per mm (203 dpi), for paper length estimates.
 DOTS_PER_MM = 8
 MAX_BACKOFF_INTERVAL = 604800
@@ -160,6 +162,25 @@ def _styled(content: Any, style: dict[str, str], printer: dict[str, Any]) -> Any
     return Document(
         elements, pick("layout"), pick("size"), document.lead if document else None
     )
+
+
+def _parts(content: Any) -> list[Any]:
+    """What ``on_select()`` returned, as the separate prints it asks for: a
+    list made only of Documents is one print each; anything else is one."""
+    if (
+        isinstance(content, (list, tuple))
+        and content
+        and all(isinstance(part, Document) for part in content)
+    ):
+        parts = list(content)
+    else:
+        parts = [content]
+    if len(parts) > MAX_SELECT_PARTS:
+        raise ValueError(f"a selection may print at most {MAX_SELECT_PARTS} parts")
+    for part in parts:
+        if not part or (isinstance(part, Document) and not part.elements):
+            raise ValueError("the selection produced nothing to print")
+    return parts
 
 
 def effective_interval(cfg: dict[str, Any], runtime: ModuleRuntime) -> int:
@@ -301,15 +322,17 @@ class ModuleRunner:
         )
 
     # -- selections ----------------------------------------------------
-    def select(self, module_id: str, payload: Any) -> dict[str, Any] | None:
+    def select(self, module_id: str, payload: Any) -> list[dict[str, Any]]:
         """Hand a scanned selection to its module's ``on_select()`` and
-        queue what it returns for printing. Returns the print job, or None
-        when the module raised :class:`Skip`.
+        queue what it returns for printing. Returns the print jobs, in
+        order: one, or one per :class:`Document` when the handler returned a
+        list of them; none when the module raised :class:`Skip`.
 
         Independent of the module's scheduled runs (it does not take the
         single-flight claim or count towards backoff), but bounded: at most
         :data:`MAX_SELECT_WORKERS` handlers at once. Raises whatever the
-        handler or the printer raises; nothing is saved or printed then.
+        handler or the printer raises; every part is laid out before any is
+        queued, so a part that cannot be drawn prints nothing.
         """
         module = self.registry.get(module_id)
         if module is None:
@@ -330,28 +353,30 @@ class ModuleRunner:
                     "info",
                     module_id,
                 )
-                return None
-            if not content or (isinstance(content, Document) and not content.elements):
-                raise ValueError("the selection produced nothing to print")
-            receipt = build_receipt(
-                module.name,
-                _styled(content, cfg["style"], settings["printer"]),
-                max_chars=SELECT_MAX_CHARS,
-                now=now,
-            )
-            image = render_image(
-                receipt, PAPERS[settings["printer"]["paper"]]["width_px"]
-            )
+                return []
+            width_px = PAPERS[settings["printer"]["paper"]]["width_px"]
+            images = []
+            for part in _parts(content):
+                receipt = build_receipt(
+                    module.name,
+                    _styled(part, cfg["style"], settings["printer"]),
+                    max_chars=SELECT_MAX_CHARS,
+                    now=now,
+                )
+                images.append(render_image(receipt, width_px))
             # A scan is a person asking, like Run now: no minimum spacing.
-            job = self.printer.submit(image, module_id, manual=True)
+            jobs = [
+                self.printer.submit(image, module_id, manual=True) for image in images
+            ]
             store.commit()
         except Exception as exc:
             module_log(f"selection failed: {exc}", "error", module_id)
             raise
         finally:
             store.discard()
-        module_log(f"selection queued as job {job['id']}", "info", module_id)
-        return job
+        numbers = ", ".join(str(job["id"]) for job in jobs)
+        module_log(f"selection queued as job {numbers}", "info", module_id)
+        return jobs
 
     def _select_with_timeout(
         self, module: Module, ctx: ModuleContext, payload: Any

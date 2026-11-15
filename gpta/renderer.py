@@ -15,7 +15,8 @@ import struct
 import textwrap
 import threading
 import unicodedata
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -265,7 +266,12 @@ def _cut(element: Element, budget: int) -> Element | None:
             if start < budget
         )
         return Text(
-            element.text[:budget], element.size, element.bold, element.align, spans
+            element.text[:budget],
+            element.size,
+            element.bold,
+            element.align,
+            spans,
+            element.indent,
         )
     return None
 
@@ -356,6 +362,16 @@ def _align(line: str, width: int, align: str) -> str:
 
 
 def _element_text(element: Any, width: int) -> list[str]:
+    indent = getattr(element, "indent", 0)
+    if indent:
+        prefix = "| " * indent
+        room = max(8, width - len(prefix))
+        lines = _plain_text(element, room)
+        return [(prefix + line).rstrip() for line in lines]
+    return _plain_text(element, width)
+
+
+def _plain_text(element: Any, width: int) -> list[str]:
     if isinstance(element, Block):
         lines = []
         if element.title:
@@ -564,6 +580,7 @@ def _fit(text: str, face: ImageFont.FreeTypeFont, width: int) -> str:
 
 
 Paint = Callable[[ImageDraw.ImageDraw, int], None]
+INDENT_BAR_PX = 2
 
 
 class _Layout:
@@ -588,11 +605,44 @@ class _Layout:
         self.pad = self.theme.margin if pad else 0
         self.y = self.pad
         self.rows: list[tuple[int, Paint]] = []
+        self._bars: tuple[int, ...] = ()  # x of each indent level's bar
 
     def add(self, height: int, paint: Paint | None = None) -> None:
+        if self._bars and height > 0:
+            paint = self._barred(height, paint)
         if paint is not None:
             self.rows.append((self.y, paint))
         self.y += height
+
+    def _barred(self, height: int, inner: Paint | None) -> Paint:
+        bars = self._bars
+
+        def paint(draw, y):
+            for x in bars:
+                draw.rectangle([x, y, x + INDENT_BAR_PX - 1, y + height - 1], fill=0)
+            if inner is not None:
+                inner(draw, y)
+
+        return paint
+
+    @contextmanager
+    def indented(self, levels: int) -> Iterator[None]:
+        """Lay out what follows ``levels`` steps in from the left, with a
+        bar down the left of each step, blank space included."""
+        if levels <= 0:
+            yield
+            return
+        step = max(INDENT_BAR_PX * 4, self.theme.body * 2 // 3)
+        # Never squeeze the text below half the width.
+        step = min(step, self.inner // (2 * levels))
+        saved = self.left, self.inner, self._bars
+        self._bars = tuple(self.left + step * level for level in range(levels))
+        self.left += step * levels
+        self.inner = self.right - self.left
+        try:
+            yield
+        finally:
+            self.left, self.inner, self._bars = saved
 
     def text(
         self,
@@ -693,6 +743,14 @@ class _Layout:
 
 
 def _layout_element(out: _Layout, element: Any) -> None:
+    # The gap below belongs to the element, so an indent's bars run on
+    # through it to the next block at that depth.
+    with out.indented(getattr(element, "indent", 0)):
+        _layout_block(out, element)
+        out.add(out.gap)
+
+
+def _layout_block(out: _Layout, element: Any) -> None:
     theme = out.theme
     if isinstance(element, Block):
         if element.title:
@@ -732,7 +790,6 @@ def _layout_element(out: _Layout, element: Any) -> None:
         _layout_ruler(out)
     else:
         raise TypeError(f"cannot render {type(element).__name__}")
-    out.add(out.gap)
 
 
 # A QR code aims for about this wide (25 mm at 203 dpi) with modules of

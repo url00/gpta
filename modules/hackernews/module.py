@@ -7,10 +7,15 @@ row says roughly how much paper that would take.
 By default only stories that read well on a receipt are listed: enough
 prose, and little that a thermal printer cannot show (pictures, video,
 code listings, tables). See :func:`unprintable`.
+
+The story's comments print as a second job after the article: the first few
+top-level threads with replies two levels deep, indented by depth. Long
+replies are cut short, with a code to read the rest on a phone.
 """
 
 from __future__ import annotations
 
+import html
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,11 +26,14 @@ from gpta.module_api import (
     Bar,
     BarChart,
     Choice,
+    Document,
     Element,
     FetchError,
     Heading,
     Module,
     ModuleContext,
+    QrCode,
+    QrItem,
     Reading,
     Rule,
     Text,
@@ -86,6 +94,174 @@ def unprintable(story: dict, reading: Reading, min_words: int) -> str:
     return ""
 
 
+# -- comments ----------------------------------------------------------
+#: Replies are printed this many levels below a top-level comment.
+REPLY_DEPTH = 2
+#: Extra comments fetched per parent, to replace dead or deleted ones.
+SPARE_COMMENTS = 2
+COMMENT_WORKERS = 16
+#: Stop measuring comment threads after this long; the rest say "unknown".
+COMMENT_BUDGET_SECONDS = 30
+CUT_NOTE = "Cut short. Scan to read the rest on Hacker News."
+
+_PARAGRAPH = re.compile(r"<p>", re.I)
+_LINK = re.compile(r"<a\s[^>]*href=\"([^\"]*)\"[^>]*>.*?</a>", re.I | re.S)
+_TAG = re.compile(r"<[^>]+>")
+
+
+def paragraphs(text: str) -> list[tuple[str, bool]]:
+    """A comment's HTML as ``(text, is_code)`` paragraphs. Links print as
+    their address, since Hacker News shortens the visible text."""
+    out = []
+    for part in _PARAGRAPH.split(text or ""):
+        code = "<pre>" in part.lower()
+        part = html.unescape(_TAG.sub("", _LINK.sub(r"\1", part)))
+        part = part.strip("\n") if code else " ".join(part.split())
+        if part.strip():
+            out.append((part, code))
+    return out
+
+
+def shorten(parts: list[tuple[str, bool]], limit: int) -> tuple[list, bool]:
+    """``parts`` cut to ``limit`` characters at a word, ending in an
+    ellipsis; and whether anything was cut. ``limit`` 0 keeps everything."""
+    if limit <= 0 or sum(len(text) for text, _code in parts) <= limit:
+        return parts, False
+    out, room = [], limit
+    for text, code in parts:
+        if len(text) <= room:
+            out.append((text, code))
+            room -= len(text)
+            continue
+        cut = text[:room].rsplit(None, 1)[0] if " " in text[:room] else text[:room]
+        if cut.strip():
+            out.append((cut.rstrip(" ,;:.") + "…", code))
+        elif out:
+            out[-1] = (out[-1][0] + " …", out[-1][1])
+        break
+    return out, True
+
+
+def age(now: float, then: float) -> str:
+    minutes = max(0, int(now - then)) // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    if minutes < 48 * 60:
+        return f"{minutes // 60}h"
+    return f"{minutes // (24 * 60)}d"
+
+
+def _live(item) -> bool:
+    return (
+        isinstance(item, dict)
+        and item.get("type") == "comment"
+        and not item.get("dead")
+        and not item.get("deleted")
+        and bool(item.get("text"))
+    )
+
+
+def load_threads(ctx: ModuleContext, story: dict, pool: ThreadPoolExecutor) -> list:
+    """The story's first comment threads, in Hacker News's own order, as
+    nested ``{"item", "replies", "more"}`` nodes: ``comment_threads``
+    top-level comments, and up to ``comment_replies`` replies under each for
+    :data:`REPLY_DEPTH` levels. ``more`` counts the replies not shown."""
+    threads = int(ctx.options.get("comment_threads", 5))
+    replies = int(ctx.options.get("comment_replies", 3))
+
+    def get(comment_id):
+        try:
+            return ctx.http.get_json(ITEM.format(comment_id))
+        except Exception as exc:
+            ctx.emit(f"comment {comment_id} fetch failed: {exc}", "debug")
+            return None
+
+    def children(parents: list[dict], limit: int) -> list[dict]:
+        """Fill in each parent's replies, one request per comment, all
+        parents' at once. Returns the new nodes."""
+        wanted = [
+            [k for k in parent["item"].get("kids") or [] if isinstance(k, int)]
+            for parent in parents
+        ]
+        take = limit + SPARE_COMMENTS if limit else 0
+        ids = [kid for kids in wanted for kid in kids[:take]]
+        items = dict(zip(ids, pool.map(get, ids), strict=True))
+        made = []
+        for parent, kids in zip(parents, wanted, strict=True):
+            live = [items[kid] for kid in kids[:take] if _live(items[kid])][:limit]
+            parent["replies"] = [{"item": i, "replies": [], "more": 0} for i in live]
+            parent["more"] = max(0, len(kids) - len(live))
+            made += parent["replies"]
+        return made
+
+    root = {"item": story}
+    level = children([root], threads)
+    for _depth in range(REPLY_DEPTH):
+        level = children(level, replies)
+    for node in level:  # the deepest level shown: its replies are all unseen
+        node["more"] = len(node["item"].get("kids") or [])
+    return root["replies"]
+
+
+def comment_blocks(ctx: ModuleContext, story: dict, threads: list) -> list[Element]:
+    """The comment threads laid out for the receipt: each comment under its
+    author, replies indented by depth, a rule between threads."""
+    now = ctx.now.timestamp()
+    reply_chars = int(ctx.options.get("reply_chars", 600))
+    link = DISCUSSION.format(story.get("id"))
+    total = int(story.get("descendants", 0))
+    blocks: list[Element] = [
+        Heading(story.get("title") or "(untitled)"),
+        Text(
+            f"Comments: the first {len(threads)} threads of {total} comments, "
+            f"replies {REPLY_DEPTH} deep. Scan for the whole discussion.",
+            size="small",
+        ),
+        QrCode(link),
+        Rule(heavy=True),
+    ]
+
+    def add(node: dict, depth: int) -> None:
+        item = node["item"]
+        parts, cut = shorten(paragraphs(item.get("text")), reply_chars if depth else 0)
+        head = f"{item.get('by') or '?'} · {age(now, int(item.get('time', now)))}"
+        if parts and not parts[0][1]:
+            first = f"{head}\n{parts[0][0]}"
+            blocks.append(Text(first, bold_spans=((0, len(head)),), indent=depth))
+            parts = parts[1:]
+        else:
+            blocks.append(Text(head, bold=True, indent=depth))
+        for text, code in parts:
+            blocks.append(Text(text, size="small" if code else "body", indent=depth))
+        if cut:
+            blocks.append(
+                QrItem(
+                    DISCUSSION.format(item.get("id")),
+                    "",
+                    CUT_NOTE,
+                    qr="small",
+                    indent=depth,
+                )
+            )
+        for reply in node["replies"]:
+            add(reply, depth + 1)
+        if node["more"]:
+            more = node["more"]
+            blocks.append(
+                Text(
+                    f"+ {more} more {'reply' if more == 1 else 'replies'}",
+                    size="small",
+                    indent=depth + 1,
+                )
+            )
+
+    for number, thread in enumerate(threads):
+        if number:
+            blocks.append(Rule())
+        add(thread, 0)
+    return blocks
+
+
 def paper_length(mm: int) -> str:
     """A rough paper length: "about 45 cm", "about 1.2 m"."""
     if mm >= 975:  # would round to 100 cm
@@ -118,6 +294,10 @@ class HackerNewsModule(Module):
             "text_only": True,
             "min_words": 400,
             "paper_estimates": True,
+            "comments": True,
+            "comment_threads": 5,
+            "comment_replies": 3,
+            "reply_chars": 600,
         },
     }
     limits_schema = {"max_items": MAX_ITEMS_LIMIT}
@@ -150,6 +330,27 @@ class HackerNewsModule(Module):
             "max": 20000,
         },
         "paper_estimates": {"type": "bool", "label": "Show paper estimates"},
+        # Comments print as a second job after the article.
+        "comments": {"type": "bool", "label": "Print comments too"},
+        "comment_threads": {
+            "type": "int",
+            "label": "Comment threads",
+            "min": 1,
+            "max": 20,
+        },
+        "comment_replies": {
+            "type": "int",
+            "label": "Replies per comment",
+            "min": 0,
+            "max": 10,
+        },
+        # Replies longer than this are cut, with a code to read the rest.
+        "reply_chars": {
+            "type": "int",
+            "label": "Longest reply (characters, 0 = whole)",
+            "min": 0,
+            "max": 5000,
+        },
     }
 
     def fetch(self, ctx: ModuleContext) -> list[Element]:
@@ -200,6 +401,8 @@ class HackerNewsModule(Module):
             return blocks + [Text("No qualifying stories.")]
 
         estimates = bool(ctx.options.get("paper_estimates", True))
+        comments = bool(ctx.options.get("comments", True))
+        threads = self._comment_lengths(ctx, picked) if estimates and comments else {}
         choices: list[Choice] = []
         bars: list[Bar] = []
         for position, (story, reading) in enumerate(picked, start=1):
@@ -209,7 +412,10 @@ class HackerNewsModule(Module):
                 f"{int(story.get('descendants', 0))} comments",
                 site(story),
             ]
-            if estimates:
+            if estimates and comments:
+                note.append(f"article {self._length(ctx, story, reading)}")
+                note.append(threads.get(story.get("id"), "comments length unknown"))
+            elif estimates:
                 note.append(self._length(ctx, story, reading))
             choices.append(
                 Choice(
@@ -219,7 +425,8 @@ class HackerNewsModule(Module):
                 )
             )
             bars.append(Bar(f"#{position}", score))
-        blocks.append(Text("Scan a code to print that article.", size="small"))
+        what = "that article and its comments" if comments else "that article"
+        blocks.append(Text(f"Scan a code to print {what}.", size="small"))
         blocks += ctx.selections.offer(choices, expires_hours=CODE_HOURS)
         return blocks + [Rule(), BarChart(tuple(bars), title="Points")]
 
@@ -287,8 +494,32 @@ class HackerNewsModule(Module):
             ctx.emit(f"story {story.get('id')}: no paper estimate: {exc}", "debug")
             return "length unknown"
 
-    def on_select(self, ctx: ModuleContext, payload) -> list[Element]:
-        """Print the chosen story's article."""
+    def _comment_lengths(self, ctx: ModuleContext, picked: list) -> dict:
+        """What to say about each story's comments, by story id: "comments
+        about 1.4 m", or "no comments". Stories that could not be measured
+        are left out."""
+        deadline = time.monotonic() + COMMENT_BUDGET_SECONDS
+        said: dict = {}
+        with ThreadPoolExecutor(max_workers=COMMENT_WORKERS) as pool:
+            for story, _reading in picked:
+                if time.monotonic() > deadline:
+                    ctx.emit("stopped measuring comments: out of time", "warning")
+                    break
+                story_id = story.get("id")
+                try:
+                    threads = load_threads(ctx, story, pool)
+                    if not threads:
+                        said[story_id] = "no comments"
+                        continue
+                    mm = ctx.paper_mm(comment_blocks(ctx, story, threads))
+                    said[story_id] = f"comments {paper_length(mm)}"
+                except Exception as exc:
+                    ctx.emit(f"story {story_id}: no comments estimate: {exc}", "debug")
+        return said
+
+    def on_select(self, ctx: ModuleContext, payload) -> list[Element] | list[Document]:
+        """Print the chosen story's article, then its comments as a second
+        job."""
         story_id = payload.get("id") if isinstance(payload, dict) else None
         if not isinstance(story_id, int):
             raise FetchError("this code does not name a story")
@@ -296,4 +527,15 @@ class HackerNewsModule(Module):
         if not isinstance(story, dict) or story.get("dead") or story.get("deleted"):
             raise FetchError(f"story {story_id} is no longer available")
         ctx.emit(f"printing story {story_id}: {story.get('title')}")
-        return list(read(ctx, story).blocks)
+        article = list(read(ctx, story).blocks)
+        if not ctx.options.get("comments", True):
+            return article
+        try:
+            with ThreadPoolExecutor(max_workers=COMMENT_WORKERS) as pool:
+                threads = load_threads(ctx, story, pool)
+        except Exception as exc:  # the article is still worth printing
+            ctx.emit(f"story {story_id}: comments not printed: {exc}", "warning")
+            return article
+        if not threads:
+            return article
+        return [Document(article), Document(comment_blocks(ctx, story, threads))]

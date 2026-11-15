@@ -95,14 +95,14 @@ wrapped to the paper width; don't pre-wrap or pad it.
 |---|---|---|
 | `Block(title, lines, meta={})` | `str`, `tuple[str, ...]`, `dict` | A large bold title over body-text lines; `""` adds a half-line gap |
 | `Heading(text)` | `str` | Large bold text |
-| `Text(text, size="body", bold=False, align="left")` | `size`: `small`, `body`, `large`, `huge`; `align`: `left`, `center`, `right` | A wrapped paragraph; `\n` starts a new line |
+| `Text(text, size="body", bold=False, align="left", indent=0)` | `size`: `small`, `body`, `large`, `huge`; `align`: `left`, `center`, `right`; `indent`: 0 to 4 | A wrapped paragraph; `\n` starts a new line. `indent` moves it in by that many levels, each marked with a bar down the left (replies in a thread, quoted text); bars join up between neighbouring blocks at the same depth |
 | `Rule(heavy=False)` | `bool` | A horizontal line (2 dots, or 4 when heavy) |
 | `KeyValue(label, value)` | `str`, `str` | Label on the left, bold value right-aligned; wraps onto two lines if both don't fit |
 | `Checkbox(text, checked=False, value="", note="")` | `str`, `bool`, `str`, `str` | A drawn box (filled when checked), `text` with a hanging indent, bold `value` right-aligned on the first line (e.g. a due date), and `note` in small text underneath |
 | `BarChart(bars, title="", max_value=None)` | `tuple[Bar, ...]`, `str`, number | One row per bar: label, black bar, value. Bars scale to `max_value` (default: the largest value) |
 | `Bar(label, value, display="")` | `str`, number, `str` | `display` replaces the printed number, e.g. `"1.2k"` |
 | `QrCode(data)` | `str`, up to 1000 characters | A centred QR code, about 25 mm wide (larger for long data), e.g. a link to the full story |
-| `QrItem(data, title, note="", label="", side="right", qr="medium")` | `side`: `left`, `right`; `qr`: `small`, `medium`, `large` (about 15, 20, 25 mm) | A list row: a QR code for `data` on one side, with `label` and bold `title` beside it and `note` in small text underneath. Always full width, also in columns. For codes that select something on this server, use `ctx.selections` (below) rather than building these by hand |
+| `QrItem(data, title, note="", label="", side="right", qr="medium", indent=0)` | `side`: `left`, `right`; `qr`: `small`, `medium`, `large` (about 15, 20, 25 mm) | A list row: a QR code for `data` on one side, with `label` and bold `title` beside it and `note` in small text underneath. Always full width, also in columns. For codes that select something on this server, use `ctx.selections` (below) rather than building these by hand |
 
 `BarChart` also accepts `(label, value)` tuples in place of `Bar`s. Blocks are
 frozen dataclasses with plain fields, so the host can save them as JSON and
@@ -154,7 +154,9 @@ class StoriesModule(Module):
   them when `rules` is on). At most 50 choices per call; a module's newest
   500 codes are kept. `expires_hours` is 1 to 2160 (90 days).
 - **`on_select(ctx, payload)`** returns blocks or a `Document`, like
-  `fetch()`, and the host prints them under the module's name. `ctx.trigger`
+  `fetch()`, and the host prints them under the module's name. Return a
+  list of `Document`s (up to 5) to print each as its own job, in order: an
+  article, then its comments. Every part is laid out before any is queued. `ctx.trigger`
   is `"select"`. `max_chars` is not applied (a chosen article prints whole,
   up to 150,000 characters, and a long print waits for approval like any
   other). `ctx.store` writes are saved if it succeeds. Raise `Skip` to print

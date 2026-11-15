@@ -13,6 +13,7 @@ from gpta.httpserver import create_server
 from gpta.logbus import LogBus
 from gpta.module_api import (
     Choice,
+    Document,
     FetchError,
     Heading,
     Module,
@@ -81,6 +82,10 @@ class Picker(Module):
     def on_select(self, ctx: ModuleContext, payload):
         if payload["id"] == 2:
             raise Skip("nothing for two")
+        if payload["id"] == 3:
+            return [Document([Text("part one")]), Document([Text("part two")])]
+        if payload["id"] == 4:
+            return [Document([Text("fine")]), Document([])]
         ctx.store.set("picked", payload["id"])
         return [Heading(f"Story {payload['id']}"), Text(ctx.trigger)]
 
@@ -235,6 +240,31 @@ class QrItemTests(unittest.TestCase):
             left = self.dark(image, (0, 0, half, image.height))
             right = self.dark(image, (half, 0, image.width, image.height))
             self.assertGreater(*((left, right) if side == "left" else (right, left)))
+
+    def test_indent(self):
+        from gpta.blocks import Text as T
+
+        for bad in (-1, 5, True, "1"):
+            with self.assertRaises(ValueError):
+                T("x", indent=bad)
+        self.assertNotIn("indent", to_dict(T("x")))
+        deep = T("reply " * 30, indent=2)
+        self.assertEqual(from_dict(to_dict(deep)), deep)
+        flat = render_image(Receipt("", (T("reply " * 30),)), 576)
+        image = render_image(Receipt("", (deep,)), 576)
+        self.assertGreaterEqual(image.height, flat.height)  # narrower, so no shorter
+        # Two bars down the left edge, running the whole height of the block.
+        column = image.convert("L").crop((8, 8, 40, image.height - 8))
+        dark = [x for x in range(column.width) if column.getpixel((x, 5)) == 0]
+        self.assertEqual(dark, [0, 1, 16, 17])
+        self.assertEqual(
+            self.dark(image, (8, 8, 10, image.height - 30)), 2 * (image.height - 38)
+        )
+        lines = render_text(Receipt("", (T("a b", indent=2),)), 20)
+        self.assertEqual(lines[0], "| | a b")
+        item = QrItem("https://x.test/s/a", "", "note", qr="small", indent=1)
+        self.assertEqual(from_dict(to_dict(item)), item)
+        render_image(Receipt("", (item,)), 384)
 
     def test_sizes_and_columns_and_text(self):
         def height(qr):
@@ -450,6 +480,22 @@ class ScanTests(unittest.TestCase):
         self.config.update_module("reads", {"style": {"size": "tiny"}})
         self.service.run_module("reads")
         self.assertLess(Reads.seen["mm"], job["length_mm"])
+
+    def test_a_selection_can_print_several_jobs(self):
+        self.enable()
+        offer = Selections(self.service.runner.selections, "picker", PUBLIC)
+        offer.offer([("Two parts", {"id": 3}), ("Bad part", {"id": 4})])
+        bad, two = self.codes()[:2]
+        before = len([job for job in self.jobs() if job])
+        status, page, _ = self.request("GET", two["path"])
+        self.assertEqual(status, 200)
+        self.assertRegex(page, r"print jobs \d+, \d+")
+        self.assertEqual(len([job for job in self.jobs() if job]), before + 2)
+        # A part that cannot print stops all of them.
+        status, page, _ = self.request("GET", bad["path"])
+        self.assertEqual(status, 502)
+        self.assertIn("nothing to print", page)
+        self.assertEqual(len([job for job in self.jobs() if job]), before + 2)
 
     def test_selection_test_screen(self):
         status, text, _ = self.request("POST", "/api/selections/test", {})
