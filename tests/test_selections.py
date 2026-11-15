@@ -13,6 +13,7 @@ from gpta.httpserver import create_server
 from gpta.logbus import LogBus
 from gpta.module_api import (
     Choice,
+    FetchError,
     Heading,
     Module,
     ModuleContext,
@@ -82,6 +83,30 @@ class Picker(Module):
             raise Skip("nothing for two")
         ctx.store.set("picked", payload["id"])
         return [Heading(f"Story {payload['id']}"), Text(ctx.trigger)]
+
+
+class Reads(Module):
+    """Uses the host's reader and paper measure, as Hacker News does."""
+
+    id = "reads"
+    name = "Reads"
+    defaults = dict(Picker.defaults)
+    seen: dict = {}
+
+    def fetch(self, ctx):
+        blocks = ctx.reader.article("https://site.example/a")
+        self.seen["mm"] = ctx.paper_mm(blocks)
+        self.seen["own"] = ctx.reader.html(
+            "<p>Hello there.</p>", "https://x.example/", "Mine"
+        )
+        try:
+            ctx.reader.article("https://site.example/empty")
+        except FetchError as exc:
+            self.seen["error"] = str(exc)
+        return ctx.selections.offer([("A", 1)])
+
+    def on_select(self, ctx, payload):
+        return ctx.reader.article("https://site.example/a")
 
 
 class Plain(Module):
@@ -265,7 +290,7 @@ class ScanTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.registry = {"picker": Picker(), "plain": Plain()}
+        self.registry = {"picker": Picker(), "plain": Plain(), "reads": Reads()}
         self.config = ConfigStore(Path(self.tmp.name) / "config.json", self.registry)
         self.config.load()
         self.clock = Clock()
@@ -404,6 +429,27 @@ class ScanTests(unittest.TestCase):
         self.assertNotIn("<b>x</b>", page)
         Selections(self.service.runner.selections, "gone", PUBLIC).offer([("y", 1)])
         self.assertEqual(self.request("GET", self.codes("gone")[0]["path"])[0], 404)
+
+    def test_reader_and_paper_estimate_match_the_print(self):
+        from gpta.reader import Page
+
+        body = "<p>" + "word " * 400 + "</p>"
+        pages = {"a": f"<title>Long</title><article>{body}</article>", "empty": ""}
+        self.service.runner.page_fetcher = lambda url: Page(
+            url, pages[url.rsplit("/", 1)[1]]
+        )
+        self.enable()
+        self.assertTrue(self.service.run_module("reads")["ok"])
+        seen = Reads.seen
+        self.assertIn("no readable text", seen["error"])
+        self.assertEqual(seen["own"][0], Heading("Mine"))
+        self.assertEqual(self.request("GET", self.codes("reads")[0]["path"])[0], 200)
+        job = self.service.queue()["pending"][-1]
+        self.assertEqual(job["length_mm"], seen["mm"])  # the estimate was exact
+        # The estimate follows the module's settings.
+        self.config.update_module("reads", {"style": {"size": "tiny"}})
+        self.service.run_module("reads")
+        self.assertLess(Reads.seen["mm"], job["length_mm"])
 
     def test_selection_test_screen(self):
         status, text, _ = self.request("POST", "/api/selections/test", {})

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 import time
@@ -12,11 +13,12 @@ from typing import Any
 
 from PIL import Image
 
-from .blocks import Block, Document
+from . import reader
+from .blocks import Block, Document, Element
 from .cache import Cache
 from .config import PAPERS, ConfigStore
 from .errors import AlreadyRunning, ModuleStuck, ModuleTimeout, NotFound
-from .module_api import Module, ModuleContext, Skip
+from .module_api import FetchError, Module, ModuleContext, Skip
 from .outputs import OutputStore
 from .printing import (
     AutoPrintOff,
@@ -24,7 +26,7 @@ from .printing import (
     PrinterDisabled,
     PrinterRateLimited,
 )
-from .renderer import Receipt, build_receipt, render_image
+from .renderer import Receipt, build_receipt, render_image, truncate
 from .selections import Selections, SelectionStore
 from .state import StateStore
 from .storage import Database, ModuleStore
@@ -37,6 +39,8 @@ MAX_EMITS_PER_RUN = 100
 SELECT_MAX_CHARS = 150_000
 #: Selection handlers running at once, counting timed-out ones still alive.
 MAX_SELECT_WORKERS = 4
+#: Printer dots per mm (203 dpi), for paper length estimates.
+DOTS_PER_MM = 8
 MAX_BACKOFF_INTERVAL = 604800
 LOG_LEVELS = {
     "debug": logging.DEBUG,
@@ -56,6 +60,33 @@ def module_log(message: str, level: str = "info", module: str | None = None) -> 
         message,
         extra={"gpta_module": module},
     )
+
+
+class PageReader:
+    """``ctx.reader``: reader mode for modules, with the same guards as the
+    console's web page tab (public http/https sites only, 3 MB, HTML)."""
+
+    def __init__(self, runner: ModuleRunner):
+        self._runner = runner
+
+    def article(self, url: str) -> list[Element]:
+        """Download ``url`` and return the article as blocks."""
+        try:
+            page = self._runner.page_fetcher(url)
+        except reader.ReaderError as exc:
+            raise FetchError(str(exc)) from exc
+        return self.html(page.html, page.url)
+
+    def html(self, html: str, url: str, title: str = "") -> list[Element]:
+        """The article in ``html`` (a page or a fragment) as blocks. ``url``
+        is where it came from; ``title`` replaces the page's own."""
+        try:
+            article = reader.extract(html, url)
+        except reader.ReaderError as exc:
+            raise FetchError(str(exc)) from exc
+        if title:
+            article = dataclasses.replace(article, title=title)
+        return article.elements(truncate(article.body, SELECT_MAX_CHARS))
 
 
 class _Abandoned(ModuleTimeout):
@@ -93,7 +124,7 @@ class RunTicket:
     cfg: dict[str, Any]
     width_px: int
     printer: dict[str, Any]
-    public_url: str = ""
+    settings: dict[str, Any]
 
 
 def _styled(content: Any, style: dict[str, str], printer: dict[str, Any]) -> Any:
@@ -160,6 +191,8 @@ class ModuleRunner:
         self.monotonic = monotonic
         self.cache = Cache(config.data_dir / "cache")
         self.selections = SelectionStore(self.db, clock)
+        # Replaced in tests so ctx.reader needs no network.
+        self.page_fetcher = reader.fetch_page
         self._select_workers: list[threading.Thread] = []
         self._lock = threading.RLock()
         self._runtime = {module_id: ModuleRuntime() for module_id in registry}
@@ -208,30 +241,49 @@ class ModuleRunner:
             settings["modules"][module_id],
             PAPERS[settings["printer"]["paper"]]["width_px"],
             settings["printer"],
-            settings["server"]["public_url"],
+            settings,
         )
 
     def _context(
         self,
-        module_id: str,
-        cfg: dict[str, Any],
+        module: Module,
+        settings: dict[str, Any],
         now: datetime,
         store: ModuleStore,
         trigger: str,
-        public_url: str,
     ) -> ModuleContext:
+        """The context for one call into ``module``; ``settings`` is the
+        config snapshot the call runs with."""
+        cfg = settings["modules"][module.id]
+        printer = settings["printer"]
+        width_px = PAPERS[printer["paper"]]["width_px"]
+
+        def paper_mm(content: Any) -> int:
+            # Measured the way select() prints: same style, same paper.
+            receipt = build_receipt(
+                module.name,
+                _styled(content, cfg["style"], printer),
+                max_chars=SELECT_MAX_CHARS,
+                now=now,
+            )
+            return round(render_image(receipt, width_px).height / DOTS_PER_MM)
+
         return ModuleContext(
-            module_id=module_id,
+            module_id=module.id,
             limits=dict(cfg["limits"]),
             options=dict(cfg["options"]),
             data_dir=self.config.data_dir,
             now=now,
             http=self.http,
             cache=self.cache,
-            log=self._make_emitter(module_id),
+            log=self._make_emitter(module.id),
             store=store,
             trigger=trigger,
-            selections=Selections(self.selections, module_id, public_url),
+            selections=Selections(
+                self.selections, module.id, settings["server"]["public_url"]
+            ),
+            reader=PageReader(self),
+            paper_mm=paper_mm,
         )
 
     # -- selections ----------------------------------------------------
@@ -254,9 +306,7 @@ class ModuleRunner:
         store = ModuleStore(self.db, module_id)
         try:
             now = self._now()
-            ctx = self._context(
-                module_id, cfg, now, store, "select", settings["server"]["public_url"]
-            )
+            ctx = self._context(module, settings, now, store, "select")
             try:
                 content = self._select_with_timeout(module, ctx, payload)
             except Skip as exc:
@@ -315,7 +365,7 @@ class ModuleRunner:
 
         try:
             now = self._now()
-            ctx = self._context(module_id, cfg, now, store, trigger, ticket.public_url)
+            ctx = self._context(module, ticket.settings, now, store, trigger)
             content = self._fetch_with_timeout(module, ctx)
             if not content or (isinstance(content, Document) and not content.elements):
                 content = [Block("No content", ("No items available.",))]

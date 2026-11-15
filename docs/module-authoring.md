@@ -177,6 +177,30 @@ class StoriesModule(Module):
 The Settings tab has a test screen that prints a sample list and shows every
 live code with its scans and last result.
 
+## Web pages and paper estimates
+
+`ctx.reader` is reader mode for modules, with the same guards as the
+console's web page tab (public http/https sites only, HTML only, 3 MB):
+
+- `ctx.reader.article(url)` downloads a page and returns it as blocks: a
+  header (title, site, address, a QR code to the original), a heavy rule,
+  then the text.
+- `ctx.reader.html(html, url, title="")` does the same for HTML the module
+  already has, such as a post body from an API.
+
+Both raise `FetchError` when the page cannot be fetched or has no readable
+text (a PDF, say).
+
+`ctx.paper_mm(content)` says roughly how many millimetres of paper blocks
+(or a `Document`) would use if `on_select()` returned them now: it lays them
+out with the module's current size and layout and the printer's paper. Use
+it to tell the reader what a choice costs before they scan it, as Hacker
+News does. It is an estimate: the page, or the settings, may change before
+the scan.
+
+In tests the default context's `reader` raises `FetchError` (there is no
+network); pass a fake with `dataclasses.replace(ctx, reader=...)`.
+
 ## Markdown
 
 `markdown_blocks(text)` turns Markdown into blocks, the same way the Instant

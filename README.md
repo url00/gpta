@@ -81,7 +81,7 @@ next start and forget its saved state.
 | Module | Interval | Limits | Options |
 |---|---|---|---|
 | `affirmations` | 1 day | 500 chars | include date |
-| `hackernews` | 7 days | 5 items, 1500 chars | window days, min score, scan limit |
+| `hackernews` | 7 days | 5 items, 1500 chars | window days, min score, scan limit, paper estimates |
 | `google_tasks` | 5 minutes | 30 tasks per list, 3000 chars | morning time, time zone, list, completed today, credentials file |
 | `google_calendar` | 5 minutes | 30 events, 3000 chars | morning time, time zone, calendar, 12/24-hour, credentials file |
 | `weather` | 5 minutes | 3000 chars | morning time, time zone, latitude, longitude, units, 12/24-hour, alerts |
@@ -89,7 +89,12 @@ next start and forget its saved state.
 - **Daily Affirmation** picks one line per day from
   `modules/affirmations/data/affirmations.txt`; edit that file to customise.
 - **Hacker News Weekly** scans the current top stories, keeps those inside the
-  window, and prints the highest-scoring `max_items`.
+  window, and prints the highest-scoring `max_items`, each beside a QR code.
+  Scanning a code prints that article (reader mode of the linked page, or
+  the post's own text). Each row also says roughly how much paper the
+  article would use with the module's current size and layout; turn
+  "Show paper estimates" off to skip the page downloads that needs. Needs
+  `server.public_url`.
 - **Google Tasks** checks your tasks every 5 minutes. The first check at or
   after the morning time (08:00, server-local unless a time zone is set)
   prints the day's list; after that a new list prints only when something

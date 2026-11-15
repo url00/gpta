@@ -17,6 +17,7 @@ from gpta.module_api import (
     Heading,
     KeyValue,
     ModuleContext,
+    QrItem,
     Rule,
     Skip,
     Text,
@@ -96,58 +97,121 @@ class ModuleTests(unittest.TestCase):
         self.assertIn("2026-10-18", " ".join(map(text_of, blocks)))
         self.assertGreater(render_image(build_receipt("A", blocks), 576).height, 100)
 
-    def test_hackernews_sort_and_window(self):
-        old = int(NOW.timestamp()) - 10 * 86400
-        recent = int(NOW.timestamp()) - 86400
+    HN_RECENT = int(NOW.timestamp()) - 86400
+    HN_STORIES = {
+        1: {
+            "id": 1,
+            "type": "story",
+            "title": "One",
+            "score": 100,
+            "time": HN_RECENT,
+            "descendants": 3,
+            "url": "https://www.one.example/post",
+        },
+        2: {
+            "id": 2,
+            "type": "story",
+            "title": "Ask HN: Two?",
+            "score": 200,
+            "time": HN_RECENT,
+            "descendants": 4,
+            "text": "<p>Own text of the post.</p>",
+        },
+        3: {
+            "id": 3,
+            "type": "story",
+            "title": "Old",
+            "score": 300,
+            "time": int(NOW.timestamp()) - 10 * 86400,
+        },
+        4: {
+            "id": 4,
+            "type": "story",
+            "title": "A PDF",
+            "score": 50,
+            "time": HN_RECENT,
+            "url": "https://pdf.example/paper.pdf",
+        },
+    }
+
+    class HnReader:
+        """Fake ``ctx.reader``: one long page, one that cannot be read."""
+
+        def article(self, url):
+            if "pdf" in url:
+                raise FetchError("not a web page (application/pdf)")
+            return [Heading("One"), Rule(heavy=True), *[Text("word " * 60)] * 40]
+
+        def html(self, html, url, title=""):
+            return [Heading(title), Rule(heavy=True), Text(html)]
+
+    def hn_ctx(self, tmp, max_items=3, **options):
         http = FakeHttp(
             {
-                HN.TOP_STORIES: [1, 2, 3],
-                HN.ITEM.format(1): {
-                    "id": 1,
-                    "type": "story",
-                    "title": "One",
-                    "score": 100,
-                    "time": recent,
-                    "descendants": 3,
-                    "url": "https://one.example",
-                },
-                HN.ITEM.format(2): {
-                    "id": 2,
-                    "type": "story",
-                    "title": "Two",
-                    "score": 200,
-                    "time": recent,
-                    "descendants": 4,
-                },
-                HN.ITEM.format(3): {
-                    "id": 3,
-                    "type": "story",
-                    "title": "Old",
-                    "score": 300,
-                    "time": old,
-                },
+                HN.TOP_STORIES: [1, 2, 3, 4],
+                **{HN.ITEM.format(n): story for n, story in self.HN_STORIES.items()},
             }
         )
+        ctx = make_ctx(
+            "hackernews",
+            http,
+            tmp,
+            limits={"max_items": max_items, "max_chars": 1500},
+            options={"window_days": 7, "min_score": 0, "scan_limit": 4, **options},
+        )
+        return replace(ctx, reader=self.HnReader())
+
+    def test_hackernews_list_has_codes_and_paper_estimates(self):
         module = self.modules["hackernews"]
         with tempfile.TemporaryDirectory() as tmp:
-            ctx = make_ctx(
-                "hackernews",
-                http,
-                tmp,
-                limits={"max_items": 2, "max_chars": 1500},
-                options={"window_days": 7, "min_score": 0, "scan_limit": 3},
-            )
+            ctx = self.hn_ctx(tmp)
             blocks = module.fetch(ctx)
-        text = "\n".join(map(text_of, blocks))
-        self.assertIn("Two", text)
-        self.assertIn("One", text)
-        self.assertNotIn("Old", text)
-        self.assertLess(text.index("Two"), text.index("One"))
-        self.assertIn("200 points", text)
-        chart = blocks[-1]
-        self.assertIsInstance(chart, BarChart)
-        self.assertEqual([bar.value for bar in chart.bars], [200, 100])
-        self.assertEqual(render_image(build_receipt("HN", blocks), 384).width, 384)
+            items = [block for block in blocks if isinstance(block, QrItem)]
+            # Highest score first; the story outside the window is left out.
+            self.assertEqual(
+                [item.title for item in items], ["Ask HN: Two?", "One", "A PDF"]
+            )
+            self.assertEqual([item.label for item in items], ["1.", "2.", "3."])
+            two, one, pdf = (item.note for item in items)
+            self.assertIn("200 points · 4 comments · news.ycombinator.com", two)
+            self.assertIn("about 5 cm", two)
+            self.assertIn("one.example", one)
+            self.assertRegex(one, r"about \d\.\d m$")
+            self.assertTrue(pdf.endswith("length unknown"))
+            for item in items:
+                self.assertTrue(item.data.startswith("http://gpta.test/s/"))
+            chart = blocks[-1]
+            self.assertIsInstance(chart, BarChart)
+            self.assertEqual([bar.value for bar in chart.bars], [200, 100, 50])
+            self.assertEqual(render_image(build_receipt("HN", blocks), 384).width, 384)
+
+            plain = module.fetch(self.hn_ctx(tmp, max_items=1, paper_estimates=False))
+            notes = [block.note for block in plain if isinstance(block, QrItem)]
+            self.assertEqual(notes, ["200 points · 4 comments · news.ycombinator.com"])
+
+    def test_hackernews_select_prints_the_article(self):
+        module = self.modules["hackernews"]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self.hn_ctx(tmp)
+            linked = module.on_select(ctx, {"id": 1})
+            self.assertEqual(len(linked), 42)
+            own = module.on_select(ctx, {"id": 2})
+            self.assertEqual(text_of(own[0]), "Ask HN: Two?")
+            self.assertIn("Own text", text_of(own[-1]))
+            for payload, problem in (
+                ({"id": 3}, "no article"),
+                ({"id": 4}, "not a web page"),
+                ({"id": 99}, "missing fake"),
+                (None, "does not name a story"),
+            ):
+                with self.assertRaisesRegex(FetchError, problem):
+                    module.on_select(ctx, payload)
+
+    def test_hackernews_paper_length_wording(self):
+        self.assertEqual(HN.paper_length(12), "about 5 cm")
+        self.assertEqual(HN.paper_length(430), "about 45 cm")
+        self.assertEqual(HN.paper_length(995), "about 1.0 m")
+        self.assertEqual(HN.paper_length(1234), "about 1.2 m")
 
     GT_OPTIONS = {
         "morning_time": "08:00",

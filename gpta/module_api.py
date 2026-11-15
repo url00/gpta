@@ -98,6 +98,24 @@ def _memory_store() -> ModuleStore:
     return ModuleStore(Database(None), "test")
 
 
+class _NoReader:
+    """``ctx.reader`` outside the host: there is no network to read from."""
+
+    def article(self, url: str) -> list[Element]:
+        raise FetchError("this context has no page reader")
+
+    def html(self, html: str, url: str, title: str = "") -> list[Element]:
+        raise FetchError("this context has no page reader")
+
+
+def _default_paper_mm(content: Any) -> int:
+    """Paper length on 80 mm paper with default settings (tests only; the
+    host measures with the module's real settings)."""
+    from .renderer import build_receipt, render_image  # needs Pillow
+
+    return round(render_image(build_receipt("", content), 576).height / 8)
+
+
 def _memory_selections() -> Selections:
     return Selections(SelectionStore(Database(None)), "test", "http://gpta.test")
 
@@ -124,6 +142,16 @@ class ModuleContext:
     #: Makes QR selection lists (``ctx.selections.offer(...)``). The default
     #: is an in-memory one for tests, with links under ``http://gpta.test``.
     selections: Selections = field(default_factory=_memory_selections)
+    #: Reader mode for web pages: ``ctx.reader.article(url)`` downloads a
+    #: public page and returns it as blocks (a header, a heavy rule, the
+    #: text); ``ctx.reader.html(html, url, title="")`` does the same for
+    #: HTML the module already has. Both raise :class:`FetchError`. The
+    #: default has no network; tests pass a fake.
+    reader: Any = field(default_factory=_NoReader)
+    #: ``ctx.paper_mm(content)``: roughly how many millimetres of paper
+    #: ``content`` (blocks or a :class:`Document`) would use if returned
+    #: from ``on_select()`` now, with the current paper, size and layout.
+    paper_mm: Callable[[Any], int] = _default_paper_mm
 
     def emit(self, message: str, level: str = "info") -> None:
         self.log(message, level)
