@@ -95,9 +95,21 @@ class ModuleTests(unittest.TestCase):
                 FakeHttp(),
                 tmp,
                 limits={"max_items": 1, "max_chars": 500},
-                options={"include_date": True},
+                options={"before_work": True, "timezone": "UTC", "include_date": True},
             )
-            blocks = module.fetch(ctx)
+            blocks = module.fetch(ctx)  # 12:00, after the 08:00 default
+            with self.assertRaisesRegex(Skip, "already printed today"):
+                module.fetch(ctx)
+            self.assertTrue(module.fetch(replace(ctx, trigger="manual")))
+            early = replace(ctx, now=NOW.replace(day=19, hour=7))
+            with self.assertRaisesRegex(Skip, "waiting for 08:00"):
+                module.fetch(early)
+            self.assertTrue(module.fetch(replace(early, trigger="manual")))
+            self.assertTrue(module.fetch(replace(early, now=early.now.replace(hour=8))))
+            off = replace(ctx, options={**ctx.options, "before_work": False})
+            with self.assertRaisesRegex(Skip, "auto print before work is off"):
+                module.fetch(replace(off, now=NOW.replace(day=20)))
+            self.assertTrue(module.fetch(replace(off, trigger="manual")))
         self.assertIsInstance(blocks[0], Heading)
         self.assertIn("2026-10-18", " ".join(map(text_of, blocks)))
         self.assertGreater(render_image(build_receipt("A", blocks), 576).height, 100)

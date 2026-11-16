@@ -80,7 +80,7 @@ next start and forget its saved state.
 
 | Module | Interval | Limits | Options |
 |---|---|---|---|
-| `affirmations` | 1 day | 500 chars | include date |
+| `affirmations` | 5 minutes | 500 chars | auto print before work, time zone, include date |
 | `hackernews` | 7 days | 10 items, 3000 chars | window days, min score, scan limit (60), only text articles, shortest article, paper estimates, comments (threads, replies, longest reply) |
 | `google_tasks` | 5 minutes | 30 tasks per list, 3000 chars | auto print before work, time zone, list, completed today, credentials file |
 | `google_calendar` | 5 minutes | 30 events, 3000 chars | auto print before work, time zone, calendar, 12/24-hour, credentials file |
@@ -88,6 +88,8 @@ next start and forget its saved state.
 
 - **Daily Affirmation** picks one line per day from
   `modules/affirmations/data/affirmations.txt`; edit that file to customise.
+  With **Auto print before work** on it prints once a day, at the before
+  work time; with it off it prints only when you press **Run**.
 - **Hacker News Weekly** scans the current top stories, keeps those inside the
   window, and prints the highest-scoring `max_items`, each beside a QR code.
   Scanning a code prints that article (reader mode of the linked page, or
@@ -111,7 +113,8 @@ next start and forget its saved state.
     paper estimates"). The comments estimate costs one request per comment
     shown, for every listed story.
 - **Before work time** (Settings tab, 08:00 by default) is when you leave
-  for work. Google Tasks, Google Calendar and Weather each have an **Auto
+  for work. Daily Affirmation, Google Tasks, Google Calendar and Weather each
+  have an **Auto
   print before work** switch: when it is on, the module makes its daily
   print at the first check at or after that time, in the server's time zone
   unless the module sets its own.
