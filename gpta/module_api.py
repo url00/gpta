@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -165,6 +165,11 @@ class ModuleContext:
     #: or the API), or ``"select"`` in ``on_select()``. A module that skips
     #: unchanged runs should still print when asked by hand.
     trigger: str = "schedule"
+    #: The global "before work time" (``server.before_work_time``), a wall
+    #: clock time. A module with a daily print offers an "Auto print before
+    #: work" option and, when it is on, makes that print at the first run at
+    #: or after this time in its own time zone.
+    before_work: time = time(8, 0)
     #: Makes QR selection lists (``ctx.selections.offer(...)``). The default
     #: is an in-memory one for tests, with links under ``http://gpta.test``.
     selections: Selections = field(default_factory=_memory_selections)

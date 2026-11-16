@@ -82,9 +82,9 @@ next start and forget its saved state.
 |---|---|---|---|
 | `affirmations` | 1 day | 500 chars | include date |
 | `hackernews` | 7 days | 10 items, 3000 chars | window days, min score, scan limit (60), only text articles, shortest article, paper estimates, comments (threads, replies, longest reply) |
-| `google_tasks` | 5 minutes | 30 tasks per list, 3000 chars | morning time, time zone, list, completed today, credentials file |
-| `google_calendar` | 5 minutes | 30 events, 3000 chars | morning time, time zone, calendar, 12/24-hour, credentials file |
-| `weather` | 5 minutes | 3000 chars | morning time, time zone, latitude, longitude, units, 12/24-hour, alerts |
+| `google_tasks` | 5 minutes | 30 tasks per list, 3000 chars | auto print before work, time zone, list, completed today, credentials file |
+| `google_calendar` | 5 minutes | 30 events, 3000 chars | auto print before work, time zone, calendar, 12/24-hour, credentials file |
+| `weather` | 5 minutes | 3000 chars | auto print before work, time zone, latitude, longitude, units, 12/24-hour, alerts |
 
 - **Daily Affirmation** picks one line per day from
   `modules/affirmations/data/affirmations.txt`; edit that file to customise.
@@ -110,19 +110,26 @@ next start and forget its saved state.
     comments, would use with the module's current size and layout ("Show
     paper estimates"). The comments estimate costs one request per comment
     shown, for every listed story.
-- **Google Tasks** checks your tasks every 5 minutes. The first check at or
-  after the morning time (08:00, server-local unless a time zone is set)
-  prints the day's list; after that a new list prints only when something
-  changed (a task added, edited or ticked off). Tasks completed today print
-  as ticked boxes. Nothing is fetched before the morning time, and **Run**
-  always prints. Setup is below.
+- **Before work time** (Settings tab, 08:00 by default) is when you leave
+  for work. Google Tasks, Google Calendar and Weather each have an **Auto
+  print before work** switch: when it is on, the module makes its daily
+  print at the first check at or after that time, in the server's time zone
+  unless the module sets its own.
+- **Google Tasks** checks your tasks every 5 minutes. With **Auto print
+  before work** on, the first check at or after the before work time prints
+  the day's list and nothing is fetched earlier; after that a new list
+  prints only when something changed (a task added, edited or ticked off).
+  With it off there is no daily list, only the prints for changes. Tasks
+  completed today print as ticked boxes. **Run** always prints. Setup is
+  below.
 
 - **Google Calendar** works the same way for today's events: the itinerary
-  prints at the morning time, then again whenever an event for today is
+  prints at the before work time, then again whenever an event for today is
   added, moved, renamed or removed. All-day events come first; events you
   declined are left out. It reads your main calendar unless you name
   another, or `*` for every calendar ticked in Google Calendar's sidebar.
-- **Weather** prints today's forecast at the morning time: conditions, high
+- **Weather** prints today's forecast at the before work time (when **Auto
+  print before work** is on): conditions, high
   and low, precipitation, wind, UV, sunrise and sunset, and the rest of the
   day in three-hour steps, with any weather alerts in effect. Every 5
   minutes, day and night, it also checks for alerts and prints each new one
@@ -275,7 +282,7 @@ limits.
 | POST | `/api/reader/fetch` | Fetch `{"url", "size", "layout"}` reader-mode style and lay out the whole page. Returns an `id` for printing, a `png` preview, `chars` (characters that will print), `total` (the page's characters; more than `chars` only past the 150,000 safety cap) and `paper_mm` (paper length). Public http(s) sites only |
 | POST | `/api/reader/print` | Print `{"id", "size", "layout"}` from a recent fetch, exactly as previewed. The last 8 fetches are kept, until a restart |
 | POST | `/api/printer/test` | Queue a test page |
-| PATCH | `/api/server` | Update `public_url`, the address printed QR selection codes link to (`""` clears it). Other server settings need a restart |
+| PATCH | `/api/server` | Update `public_url`, the address printed QR selection codes link to (`""` clears it), or `before_work_time` (`"HH:MM"`, 24-hour). Other server settings need a restart |
 | GET | `/s/<token>` | A scanned QR selection code: runs the module's `on_select()` for that item and prints the result; answers with a small HTML page. Repeats within 30 seconds are ignored; `410` once expired |
 | GET | `/api/selections` | `public_url` and the 50 newest selection codes: `path`, `module`, `title`, `expires_at`, `expired`, `use_count`, `last_used_at`, `last_result` |
 | POST | `/api/selections/test` | Make a sample selection list from `{"count", "side", "qr", "numbered", "rules", "expires_hours"}` and return its `png` preview and the code list; `"print": true` also prints it. Scanning a test code prints a confirmation |

@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from datetime import time as wall_time
 from typing import Any
 
 from PIL import Image
@@ -314,6 +315,7 @@ class ModuleRunner:
             log=self._make_emitter(module.id),
             store=store,
             trigger=trigger,
+            before_work=wall_time.fromisoformat(settings["server"]["before_work_time"]),
             selections=Selections(
                 self.selections, module.id, settings["server"]["public_url"]
             ),

@@ -1,9 +1,10 @@
-"""Google Tasks: a morning list, then a fresh one whenever the tasks change.
+"""Google Tasks: a list before work, then a fresh one whenever the tasks change.
 
-The module runs every few minutes. The first run at or after the morning
-time prints the day's list; later runs print only when the list differs from
-the last one printed, and otherwise raise ``Skip``. Before the morning time
-nothing is fetched. A manual run always prints.
+The module runs every few minutes. With "Auto print before work" on, the
+first run at or after the global before work time prints the day's list and
+nothing is fetched earlier; with it off, the first run of the day prints
+nothing. Later runs print only when the list differs from the last one seen,
+and otherwise raise ``Skip``. A manual run always prints.
 
 Access uses an OAuth refresh token for a Desktop-app client, written once by
 ``scripts/google_oauth.py`` (see the README for the Google Cloud setup).
@@ -16,7 +17,7 @@ import json
 import re
 import urllib.parse
 from dataclasses import astuple
-from datetime import UTC, date, datetime, time, tzinfo
+from datetime import UTC, date, datetime, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -211,14 +212,6 @@ def _zone(ctx: ModuleContext) -> tzinfo | None:
         raise FetchError(f"unknown time zone {name!r}") from exc
 
 
-def _morning(ctx: ModuleContext) -> time:
-    raw = str(ctx.options.get("morning_time") or "").strip()
-    match = re.fullmatch(r"(\d{1,2}):(\d{2})", raw)
-    if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
-        raise FetchError(f"morning time must be HH:MM (24-hour), not {raw!r}")
-    return time(int(match.group(1)), int(match.group(2)))
-
-
 def _old_fingerprint(blocks: list[Element]) -> str:
     """The hash saved by 0.10.0 and earlier. It covered every field of a
     block, so it changed whenever a release added one; still recognised so
@@ -231,7 +224,7 @@ class GoogleTasksModule(Module):
     id = "google_tasks"
     name = "Google Tasks"
     description = (
-        "Prints your Google Tasks each morning, then again whenever they change."
+        "Prints your Google Tasks before work, then again whenever they change."
     )
 
     defaults = {
@@ -239,7 +232,7 @@ class GoogleTasksModule(Module):
         "interval_seconds": 300,
         "limits": {"max_items": 30, "max_chars": 3000},
         "options": {
-            "morning_time": "08:00",
+            "before_work": True,
             "timezone": "",
             "task_list": "",
             "show_completed": True,
@@ -248,11 +241,7 @@ class GoogleTasksModule(Module):
     }
     limits_schema = {"max_items": {**MAX_ITEMS_LIMIT, "label": "Max tasks per list"}}
     options_schema = {
-        "morning_time": {
-            "type": "str",
-            "label": "First print of the day (HH:MM, 24-hour)",
-            "max_length": 5,
-        },
+        "before_work": {"type": "bool", "label": "Auto print before work"},
         "timezone": {
             "type": "str",
             "label": "Time zone, e.g. America/Toronto (blank = server's)",
@@ -276,9 +265,10 @@ class GoogleTasksModule(Module):
 
     def fetch(self, ctx: ModuleContext) -> list[Element]:
         local = ctx.now.astimezone(_zone(ctx))
-        morning = _morning(ctx)
+        auto = bool(ctx.options.get("before_work", True))
+        morning = ctx.before_work
         manual = ctx.trigger == "manual"
-        if not manual and local.time() < morning:
+        if auto and not manual and local.time() < morning:
             raise Skip(f"waiting for {morning:%H:%M}")
 
         token = _access_token(ctx, _load_credentials(ctx))
@@ -316,8 +306,18 @@ class GoogleTasksModule(Module):
         ):
             ctx.store.set("fingerprint", printed)
             raise Skip("no task changes")
-        if local.time() >= morning:  # an early manual run is not the morning list
+        if not auto and not manual and first_today:
+            # No daily print: note today's list, so only later changes print.
+            ctx.store.set("printed_day", today.isoformat())
+            ctx.store.set("fingerprint", printed)
+            raise Skip("auto print before work is off")
+        # With the daily print on, an early manual run does not stand in for it.
+        if not auto or local.time() >= morning:
             ctx.store.set("printed_day", today.isoformat())
         ctx.store.set("fingerprint", printed)
-        ctx.emit("morning list" if first_today else "tasks changed; printing new list")
+        ctx.emit(
+            "before-work list"
+            if first_today and not manual
+            else "tasks changed; printing new list"
+        )
         return blocks

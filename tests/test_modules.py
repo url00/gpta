@@ -3,7 +3,7 @@ import sys
 import tempfile
 import unittest
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import ClassVar
 
@@ -417,7 +417,7 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(HN.paper_length(1234), "about 1.2 m")
 
     GT_OPTIONS = {
-        "morning_time": "08:00",
+        "before_work": True,
         "timezone": "UTC",
         "task_list": "",
         "show_completed": True,
@@ -529,6 +529,57 @@ class ModuleTests(unittest.TestCase):
             with self.assertRaises(Skip):
                 module.fetch(at(8, 5, day=19))
 
+    def test_google_tasks_without_auto_print_before_work(self):
+        module = self.modules["google_tasks"]
+        http = self.gt_http(self.GT_PENDING)
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self.gt_ctx(tmp, http).store
+
+            def at(hour, **kwargs):
+                now = NOW.replace(hour=hour)
+                return self.gt_ctx(
+                    tmp, http, now=now, store=store, before_work=False, **kwargs
+                )
+
+            # No daily print, early or late; the list is only noted.
+            with self.assertRaisesRegex(Skip, "auto print before work is off"):
+                module.fetch(at(3))
+            with self.assertRaisesRegex(Skip, "no task changes"):
+                module.fetch(at(9))
+            self.assertTrue(module.fetch(at(9, trigger="manual")))
+            # A change still prints.
+            http.json_by_url[GT.pending_url("@default")] = {
+                "items": self.GT_PENDING[1:]
+            }
+            self.assertTrue(module.fetch(at(10)))
+
+    def test_before_work_time_comes_from_the_context(self):
+        module = self.modules["google_tasks"]
+        http = self.gt_http(self.GT_PENDING)
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = replace(self.gt_ctx(tmp, http), before_work=time(12, 30))
+            with self.assertRaisesRegex(Skip, "waiting for 12:30"):
+                module.fetch(ctx)  # NOW is 12:00 UTC
+            late = replace(ctx, now=NOW.replace(minute=30))
+            self.assertTrue(module.fetch(late))
+
+    def test_weather_without_auto_print_before_work(self):
+        module = self.modules["weather"]
+        alert = self.wx_alert("urn:1", "Winter Storm Warning", "Severe")
+        with tempfile.TemporaryDirectory() as tmp:
+            http = self.wx_http([alert])
+            first = self.wx_ctx(tmp, http, before_work=False)
+            # After the before work time: the new alert, but no forecast.
+            self.assertEqual(module.fetch(first)[0], Heading("Winter Storm Warning"))
+            with self.assertRaisesRegex(Skip, "no new weather alerts$"):
+                module.fetch(
+                    self.wx_ctx(tmp, http, store=first.store, before_work=False)
+                )
+            manual = self.wx_ctx(
+                tmp, http, store=first.store, before_work=False, trigger="manual"
+            )
+            self.assertEqual(module.fetch(manual)[0], Heading("Sunday, Oct 18"))
+
     def test_fingerprint_ignores_fields_left_at_their_defaults(self):
         @dataclass(frozen=True)
         class Newer:  # Text after a release adds an optional field
@@ -588,8 +639,6 @@ class ModuleTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(FetchError, "found: My Tasks, Chores"):
                 module.fetch(self.gt_ctx(tmp, http, task_list="Nope"))
-            with self.assertRaisesRegex(FetchError, "HH:MM"):
-                module.fetch(self.gt_ctx(tmp, http, morning_time="8am"))
 
     def test_google_tasks_credential_errors(self):
         module = self.modules["google_tasks"]
@@ -603,7 +652,7 @@ class ModuleTests(unittest.TestCase):
                 module.fetch(ctx)
 
     GC_OPTIONS = {
-        "morning_time": "08:00",
+        "before_work": True,
         "timezone": "America/Chicago",
         "calendar": "",
         "clock": "12-hour",
@@ -787,7 +836,7 @@ class ModuleTests(unittest.TestCase):
                 module.fetch(ctx)
 
     WX_OPTIONS = {
-        "morning_time": "08:00",
+        "before_work": True,
         "timezone": "America/Chicago",
         "latitude": "",
         "longitude": "",
@@ -1012,8 +1061,6 @@ class ModuleTests(unittest.TestCase):
                 module.fetch(self.wx_ctx(tmp, FakeHttp()))
             with self.assertRaisesRegex(FetchError, "must both be numbers"):
                 module.fetch(self.wx_ctx(tmp, FakeHttp(), latitude="44.8"))
-            with self.assertRaisesRegex(FetchError, "HH:MM"):
-                module.fetch(self.wx_ctx(tmp, FakeHttp(), morning_time="8am"))
 
 
 if __name__ == "__main__":

@@ -27,9 +27,13 @@ DEFAULT_SERVER = {
     # Printed QR selection codes link to it; its host is also accepted in the
     # Host header. Empty: selection lists cannot be made.
     "public_url": "",
+    # When the operator leaves for work, "HH:MM" (24-hour). Modules with
+    # "Auto print before work" switched on make their daily print at this
+    # time, each in its own time zone (the server's unless it sets one).
+    "before_work_time": "08:00",
 }
 #: Server settings that can change while running (the rest need a restart).
-LIVE_SERVER_KEYS = {"public_url"}
+LIVE_SERVER_KEYS = {"public_url", "before_work_time"}
 DEFAULT_PRINTER = {
     "enabled": False,
     "auto_print": True,
@@ -321,7 +325,22 @@ def _normalise_server(raw: Any) -> dict[str, Any]:
         raise ConfigError("server.allowed_hosts must be a non-empty list of hostnames")
     result["allowed_hosts"] = [h.strip().lower() for h in hosts]
     result["public_url"] = _public_url(result["public_url"])
+    result["before_work_time"] = _clock_time(
+        result["before_work_time"], "server.before_work_time"
+    )
     return result
+
+
+def _clock_time(value: Any, where: str) -> str:
+    """A 24-hour clock time normalised to ``HH:MM``."""
+    match = (
+        re.fullmatch(r"(\d{1,2}):(\d{2})", value.strip())
+        if isinstance(value, str)
+        else None
+    )
+    if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
+        raise ConfigError(f"{where} must be HH:MM (24-hour)")
+    return f"{int(match.group(1)):02d}:{match.group(2)}"
 
 
 def _public_url(value: Any) -> str:

@@ -1029,6 +1029,7 @@ let selectView = "";     // what the code list currently shows
 
 function updateSettings() {
   setValueIfIdle(document.getElementById("server-public-url"), state.server.public_url);
+  setValueIfIdle(document.getElementById("server-before-work"), state.server.before_work_time);
 }
 
 function dayTime(iso) {
@@ -1089,6 +1090,19 @@ async function refreshSelections() {
 }
 
 function bindSettings() {
+  const saveTime = document.getElementById("before-work-save");
+  saveTime.addEventListener("click", () => {
+    busy(saveTime, async () => {
+      const input = document.getElementById("server-before-work");
+      const result = await api("/api/server", {
+        method: "PATCH",
+        body: { before_work_time: input.value },
+      });
+      input.value = result.server.before_work_time;
+      showBanner(`Before work time set to ${result.server.before_work_time}.`);
+      await refresh();
+    });
+  });
   const save = document.getElementById("server-save");
   save.addEventListener("click", () => {
     busy(save, async () => {

@@ -291,6 +291,7 @@ so existing modules won't change.
 | `emit(message, level)` | Log to the console; level `debug`, `info`, `warning`, `error` |
 | `data_dir` | The data directory (for credentials files; prefer `cache` for downloads) |
 | `trigger` | What started the run: `"schedule"` or `"manual"` (the Run button or the API) |
+| `before_work` | The global before work time (`datetime.time`, Settings tab). A module with a daily print should offer a `bool` option labelled "Auto print before work" and, when it is on, make that print at the first run at or after this time |
 
 Raise `gpta.module_api.FetchError` when source data is unavailable.
 `gpta.http.FetchError` subclasses it, so `except FetchError` covers both your

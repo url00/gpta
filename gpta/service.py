@@ -33,7 +33,7 @@ from .blocks import (
     Text,
     size_of,
 )
-from .config import PAPERS, ConfigStore
+from .config import LIVE_SERVER_KEYS, PAPERS, ConfigStore
 from .errors import AlreadyRunning, InvalidRequest, ModuleTimeout, NotFound
 from .http import HttpClient
 from .logbus import LogBus
@@ -350,10 +350,10 @@ class Service:
 
     # -- QR selections -------------------------------------------------
     def set_server(self, patch: Any) -> dict[str, Any]:
-        """Change the live server settings (``public_url``)."""
+        """Change the live server settings (``config.LIVE_SERVER_KEYS``)."""
         server = self.config.update_server(patch)
         module_log("server configuration updated")
-        return {"public_url": server["public_url"]}
+        return {key: server[key] for key in sorted(LIVE_SERVER_KEYS)}
 
     def scan(self, token: str) -> ScanResult:
         """Act on a scanned selection code and say what happened."""
@@ -569,6 +569,7 @@ class Service:
                 "host": self.bound_host or config["server"]["host"],
                 "port": self.bound_port or config["server"]["port"],
                 "public_url": config["server"]["public_url"],
+                "before_work_time": config["server"]["before_work_time"],
                 "uptime_seconds": max(0, int(self.monotonic() - self._started_mono)),
                 **self.scheduler.status(),
                 "config_path": str(self.config.path),

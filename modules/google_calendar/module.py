@@ -1,10 +1,11 @@
-"""Google Calendar: the day's itinerary each morning, reprinted when it changes.
+"""Google Calendar: the day's itinerary before work, reprinted when it changes.
 
-Runs every few minutes, like the Google Tasks module. The first run at or
-after the morning time prints today's events; later runs print only when the
-itinerary differs from the last one printed (an event added, moved, renamed
-or removed) and otherwise raise ``Skip``. Before the morning time nothing is
-fetched. A manual run always prints.
+Runs every few minutes, like the Google Tasks module. With "Auto print
+before work" on, the first run at or after the global before work time
+prints today's events and nothing is fetched earlier; with it off, the first
+run of the day prints nothing. Later runs print only when the itinerary
+differs from the last one seen (an event added, moved, renamed or removed)
+and otherwise raise ``Skip``. A manual run always prints.
 
 It shares ``data/google_credentials.json`` with Google Tasks. The sign-in
 must include the Calendar scope: run ``scripts/google_oauth.py`` again if it
@@ -15,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import urllib.parse
 from dataclasses import astuple
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
@@ -274,14 +274,6 @@ def _midnight(day: date, zone: tzinfo | None) -> datetime:
     return naive.replace(tzinfo=zone) if zone else naive.astimezone()
 
 
-def _morning(ctx: ModuleContext) -> time:
-    raw = str(ctx.options.get("morning_time") or "").strip()
-    match = re.fullmatch(r"(\d{1,2}):(\d{2})", raw)
-    if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
-        raise FetchError(f"morning time must be HH:MM (24-hour), not {raw!r}")
-    return time(int(match.group(1)), int(match.group(2)))
-
-
 def _old_fingerprint(blocks: list[Element]) -> str:
     """The hash saved by 0.10.0 and earlier. It covered every field of a
     block, so it changed whenever a release added one; still recognised so
@@ -294,7 +286,7 @@ class GoogleCalendarModule(Module):
     id = "google_calendar"
     name = "Google Calendar"
     description = (
-        "Prints today's itinerary each morning, then again whenever it changes."
+        "Prints today's itinerary before work, then again whenever it changes."
     )
 
     defaults = {
@@ -302,7 +294,7 @@ class GoogleCalendarModule(Module):
         "interval_seconds": 300,
         "limits": {"max_items": 30, "max_chars": 3000},
         "options": {
-            "morning_time": "08:00",
+            "before_work": True,
             "timezone": "",
             "calendar": "",
             "clock": "12-hour",
@@ -311,11 +303,7 @@ class GoogleCalendarModule(Module):
     }
     limits_schema = {"max_items": {**MAX_ITEMS_LIMIT, "label": "Max events"}}
     options_schema = {
-        "morning_time": {
-            "type": "str",
-            "label": "First print of the day (HH:MM, 24-hour)",
-            "max_length": 5,
-        },
+        "before_work": {"type": "bool", "label": "Auto print before work"},
         "timezone": {
             "type": "str",
             "label": "Time zone, e.g. America/Chicago (blank = server's)",
@@ -341,9 +329,10 @@ class GoogleCalendarModule(Module):
     def fetch(self, ctx: ModuleContext) -> list[Element]:
         zone = _zone(ctx)
         local = ctx.now.astimezone(zone)
-        morning = _morning(ctx)
+        auto = bool(ctx.options.get("before_work", True))
+        morning = ctx.before_work
         manual = ctx.trigger == "manual"
-        if not manual and local.time() < morning:
+        if auto and not manual and local.time() < morning:
             raise Skip(f"waiting for {morning:%H:%M}")
 
         token = _access_token(ctx, _load_credentials(ctx))
@@ -375,8 +364,18 @@ class GoogleCalendarModule(Module):
         ):
             ctx.store.set("fingerprint", printed)
             raise Skip("no calendar changes")
-        if local.time() >= morning:  # an early manual run is not the morning list
+        if not auto and not manual and first_today:
+            # No daily print: note today's list, so only later changes print.
+            ctx.store.set("printed_day", today.isoformat())
+            ctx.store.set("fingerprint", printed)
+            raise Skip("auto print before work is off")
+        # With the daily print on, an early manual run does not stand in for it.
+        if not auto or local.time() >= morning:
             ctx.store.set("printed_day", today.isoformat())
         ctx.store.set("fingerprint", printed)
-        ctx.emit("morning itinerary" if first_today else "calendar changed; reprinting")
+        ctx.emit(
+            "before-work itinerary"
+            if first_today and not manual
+            else "calendar changed; reprinting"
+        )
         return blocks

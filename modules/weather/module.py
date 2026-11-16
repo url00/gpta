@@ -1,10 +1,11 @@
-"""Weather: the day's forecast each morning, plus alerts as they are issued.
+"""Weather: the day's forecast before work, plus alerts as they are issued.
 
-Runs every few minutes, like the Google Tasks and Calendar modules. The
-first run at or after the morning time prints today's forecast with any
-alerts in effect. Every run, day and night, also checks for weather alerts
-and prints each new one once; a run with nothing new raises ``Skip``. A
-manual run always prints the forecast.
+Runs every few minutes, like the Google Tasks and Calendar modules. With
+"Auto print before work" on, the first run at or after the global before
+work time prints today's forecast with any alerts in effect. Every run, day
+and night, also checks for weather alerts and prints each new one once; a
+run with nothing new raises ``Skip``. A manual run always prints the
+forecast.
 
 The forecast comes from Open-Meteo and alerts from the US National Weather
 Service (so alerts cover the United States only); neither needs an account.
@@ -16,7 +17,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
-from datetime import date, datetime, time, timedelta, tzinfo
+from datetime import date, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo
 
 from gpta.module_api import (
@@ -427,19 +428,11 @@ def _zone(ctx: ModuleContext) -> tzinfo | None:
         raise FetchError(f"unknown time zone {name!r}") from exc
 
 
-def _morning(ctx: ModuleContext) -> time:
-    raw = str(ctx.options.get("morning_time") or "").strip()
-    match = re.fullmatch(r"(\d{1,2}):(\d{2})", raw)
-    if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
-        raise FetchError(f"morning time must be HH:MM (24-hour), not {raw!r}")
-    return time(int(match.group(1)), int(match.group(2)))
-
-
 class WeatherModule(Module):
     id = "weather"
     name = "Weather"
     description = (
-        "Prints today's forecast each morning, and weather alerts as they are issued."
+        "Prints today's forecast before work, and weather alerts as they are issued."
     )
 
     defaults = {
@@ -447,7 +440,7 @@ class WeatherModule(Module):
         "interval_seconds": 300,
         "limits": {"max_chars": 3000},
         "options": {
-            "morning_time": "08:00",
+            "before_work": True,
             "timezone": "",
             "latitude": "",
             "longitude": "",
@@ -457,11 +450,7 @@ class WeatherModule(Module):
         },
     }
     options_schema = {
-        "morning_time": {
-            "type": "str",
-            "label": "Forecast print time (HH:MM, 24-hour)",
-            "max_length": 5,
-        },
+        "before_work": {"type": "bool", "label": "Auto print before work"},
         "timezone": {
             "type": "str",
             "label": "Time zone, e.g. America/Chicago (blank = server's)",
@@ -498,11 +487,12 @@ class WeatherModule(Module):
         zone = _zone(ctx)
         local = ctx.now.astimezone(zone)
         today = local.date()
-        morning = _morning(ctx)
+        auto = bool(ctx.options.get("before_work", True))
+        morning = ctx.before_work
         manual = ctx.trigger == "manual"
         after_morning = local.time() >= morning
         first_today = ctx.store.get("printed_day") != today.isoformat()
-        want_forecast = manual or (after_morning and first_today)
+        want_forecast = manual or (auto and after_morning and first_today)
         units = ctx.options.get("units")
         units = units if units in UNITS else "imperial"
         twelve_hour = ctx.options.get("clock") != "24-hour"
@@ -514,7 +504,7 @@ class WeatherModule(Module):
         except FetchError as exc:
             if not want_forecast:
                 raise
-            # Alerts being unavailable must not cost the morning forecast.
+            # Alerts being unavailable must not cost the daily forecast.
             ctx.emit(f"could not check weather alerts: {exc}", "warning")
             alerts = None
 
@@ -530,7 +520,7 @@ class WeatherModule(Module):
             if not fresh:
                 raise Skip(
                     "no new weather alerts"
-                    if after_morning or not first_today
+                    if not auto or after_morning or not first_today
                     else f"no new weather alerts; forecast at {morning:%H:%M}"
                 )
             ctx.emit(f"{len(fresh)} new weather alert(s)")
@@ -552,7 +542,7 @@ class WeatherModule(Module):
                 Text("Alerts in effect", size="small"),
                 *_alert_summary(alerts, zone, twelve_hour, today),
             ]
-        if after_morning:  # an early manual run is not the morning forecast
+        if auto and after_morning:  # an early manual run is not the daily forecast
             ctx.store.set("printed_day", today.isoformat())
-        ctx.emit("morning forecast" if first_today and after_morning else "forecast")
+        ctx.emit("before-work forecast" if want_forecast and not manual else "forecast")
         return blocks

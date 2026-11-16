@@ -290,6 +290,14 @@ class ConfigTests(unittest.TestCase):
             store = ConfigStore(Path(tmp) / "config.json", {})
             store.load()
             self.assertEqual(store.snapshot()["server"]["public_url"], "")
+            self.assertEqual(store.snapshot()["server"]["before_work_time"], "08:00")
+            self.assertEqual(
+                store.update_server({"before_work_time": "7:15"})["before_work_time"],
+                "07:15",
+            )
+            for bad in ("8am", "24:00", "07:60", "", 715):
+                with self.assertRaises(ConfigError):
+                    store.update_server({"before_work_time": bad})
             self.assertEqual(
                 store.update_server({"public_url": " https://Gpta.example.test/ "})[
                     "public_url"
@@ -538,6 +546,13 @@ class ScanTests(unittest.TestCase):
         self.enable()
         state = json.loads(self.request("GET", "/api/state")[1])
         self.assertEqual(state["server"]["public_url"], PUBLIC)
+        status, body, _ = self.request(
+            "PATCH", "/api/server", {"before_work_time": "06:45"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["server"]["before_work_time"], "06:45")
+        state = json.loads(self.request("GET", "/api/state")[1])
+        self.assertEqual(state["server"]["before_work_time"], "06:45")
 
 
 if __name__ == "__main__":

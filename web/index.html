@@ -177,6 +177,17 @@
 
     <section id="panel-settings" class="panel settings-panel" role="tabpanel" aria-labelledby="tab-settings" tabindex="0" hidden>
       <h2>Settings</h2>
+      <h3>Before work time</h3>
+      <p class="desc">When you leave for work. Modules with <strong>Auto print before work</strong> switched on make their daily print at this time.</p>
+      <div class="printer-form">
+        <label class="field">Before work time
+          <input id="server-before-work" type="time" required autocomplete="off">
+        </label>
+      </div>
+      <div class="actions">
+        <button id="before-work-save" type="button">Save time</button>
+      </div>
+
       <h3>Public address</h3>
       <p class="desc">Where a phone reaches this server, e.g. <code>https://gpta.example.com</code>. Printed QR selection codes link to it, so modules cannot make selection lists until it is set.</p>
       <div class="printer-form">
