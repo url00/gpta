@@ -216,9 +216,7 @@ class ModuleTests(unittest.TestCase):
             self.assertTrue(pdf.endswith("length unknown"))
             for item in items:
                 self.assertTrue(item.data.startswith("http://gpta.test/s/"))
-            chart = blocks[-1]
-            self.assertIsInstance(chart, BarChart)
-            self.assertEqual([bar.value for bar in chart.bars], [200, 100, 50])
+            self.assertFalse(any(isinstance(b, BarChart) for b in blocks))
             self.assertEqual(render_image(build_receipt("HN", blocks), 384).width, 384)
 
             ctx = self.hn_ctx(tmp, max_items=1, paper_estimates=False)

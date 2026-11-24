@@ -56,7 +56,6 @@ class PrinterSafetyTests(unittest.TestCase):
         config = {
             "enabled": True,
             "auto_print": True,
-            "min_print_spacing_seconds": 0,
             "max_prints_per_hour": 100,
             "failure_threshold": 2,
         }
@@ -106,8 +105,8 @@ class PrinterSafetyTests(unittest.TestCase):
         self.assertEqual(max_active, 1)
         self.assertEqual(calls, 2)
 
-    def test_instant_print_needs_no_auto_print_and_skips_spacing(self):
-        self.enable_printer(min_print_spacing_seconds=30, auto_print=False)
+    def test_instant_print_needs_no_auto_print(self):
+        self.enable_printer(auto_print=False)
         with patch("gpta.printing.transport.send_to_device") as send:
             self.service.test_printer()
             result = self.service.instant_print({"text": "milk\neggs", "size": "large"})
@@ -143,27 +142,16 @@ class PrinterSafetyTests(unittest.TestCase):
     def scheduled_run(self):
         return self.service.runner.run("fake", trigger="schedule")
 
-    def test_minimum_spacing_delays_automatic_prints(self):
-        self.enable_printer(min_print_spacing_seconds=30)
+    def test_automatic_prints_follow_each_other_without_a_delay(self):
+        self.enable_printer()
         with patch("gpta.printing.transport.send_to_device") as send:
             first = self.scheduled_run()
             self.idle()
             second = self.scheduled_run()
             self.idle()
             self.assertTrue(first["queued"] and second["queued"])
-            self.assertEqual(send.call_count, 1)
-            queue = self.queue()
-            self.assertEqual(len(queue["pending"]), 1)  # waiting, not dropped
-            self.assertIn("between automatic prints", queue["blocked"])
-            # A manual print goes behind it and waits its turn...
-            self.small_job()
-            self.idle()
-            self.assertEqual(send.call_count, 1)
-            # ...unless it is moved to the head: manual prints skip spacing.
-            manual = self.queue()["pending"][1]
-            self.service.queue_action(str(manual["id"]), "move", {"to": "top"})
-            self.idle()
             self.assertEqual(send.call_count, 2)
+            self.assertIsNone(self.queue()["blocked"])
 
     def test_newer_scheduled_receipt_replaces_the_waiting_one(self):
         self.enable_printer()

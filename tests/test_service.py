@@ -182,7 +182,6 @@ class ServiceTests(unittest.TestCase):
             {
                 "enabled": True,
                 "auto_print": True,
-                "min_print_spacing_seconds": 0,
                 "failure_threshold": 10,
             }
         )

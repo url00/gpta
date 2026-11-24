@@ -203,9 +203,7 @@ class Service:
 
         self.outputs = OutputStore()
         self.db = Database(config.data_dir / "gpta.db")
-        self.printer = Printer(
-            config, self.db, writer=printer_writer, clock=clock, monotonic=monotonic
-        )
+        self.printer = Printer(config, self.db, writer=printer_writer, clock=clock)
         self.runner = ModuleRunner(
             config,
             registry,

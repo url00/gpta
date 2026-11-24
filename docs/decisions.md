@@ -208,8 +208,8 @@ rate-limited automatic print was silently lost, and nothing could be seen,
 reordered or stopped. A queue gives one place to hold, show and control
 prints.
 
-- **Hold, don't refuse.** Spacing and the hourly cap delay the queue instead
-  of dropping prints. Only a disabled printer or a full queue (50 jobs)
+- **Hold, don't refuse.** The hourly cap delays the queue instead of
+  dropping prints. Only a disabled printer or a full queue (50 jobs)
   refuses a print.
 - **Length is checked at the head.** A job over `printer.warn_length_mm`
   holds the queue only when it is next, so short jobs ahead of it still

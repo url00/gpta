@@ -379,7 +379,7 @@ store; read it back with `ctx.store.get(...)` after calling `fetch(ctx)`.
 | Store atomicity | A run's writes are saved together, only if the run succeeds |
 | Log ring | 1000 entries in memory |
 | Emit bound | 100 `ctx.emit` calls per run |
-| Printer | One queue for every print: serialized writes, deadline, 30s spacing, hourly cap, approval over 2.5 m, pause |
+| Printer | One queue for every print: serialized writes, deadline, hourly cap, approval over 2.5 m, pause |
 | Print queue | A module's newer scheduled receipt replaces its waiting one; jobs expire after 24 h |
 | Failure backoff | Interval doubles after each failure, capped at 7 days |
 

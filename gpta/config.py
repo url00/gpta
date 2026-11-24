@@ -45,7 +45,6 @@ DEFAULT_PRINTER = {
     "feed_lines": 0,
     "cut": True,
     "write_timeout_seconds": 30,
-    "min_print_spacing_seconds": 30,
     "max_prints_per_hour": 60,
     "failure_threshold": 3,
     # A job longer than this waits at the head of the queue, holding the
@@ -409,13 +408,6 @@ def _normalise_printer(raw: Any) -> dict[str, Any]:
         or not 1 <= result["write_timeout_seconds"] <= 120
     ):
         raise ConfigError("printer.write_timeout_seconds must be between 1 and 120")
-    if (
-        type(result["min_print_spacing_seconds"]) is not int
-        or not 0 <= result["min_print_spacing_seconds"] <= 3600
-    ):
-        raise ConfigError(
-            "printer.min_print_spacing_seconds must be between 0 and 3600"
-        )
     if (
         type(result["max_prints_per_hour"]) is not int
         or not 1 <= result["max_prints_per_hour"] <= 10000

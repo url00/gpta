@@ -41,7 +41,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(snap["printer"]["paper"], "80mm")
         self.assertNotIn("width", snap["printer"])
         self.assertEqual(snap["server"]["run_timeout_seconds"], 120)
-        self.assertEqual(snap["printer"]["min_print_spacing_seconds"], 30)
         self.assertEqual(snap["printer"]["failure_threshold"], 3)
         self.assertEqual(list(Path(self.tmp.name).glob("*.tmp")), [])
 
@@ -93,9 +92,20 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaises(ConfigError):
                     self.store.update_printer({"cups_queue": bad})
 
+    def test_stored_print_spacing_is_dropped_and_other_settings_kept(self):
+        data = json.loads(self.path.read_text())
+        data["printer"]["min_print_spacing_seconds"] = 30
+        data["printer"]["paper"] = "58mm"
+        self.path.write_text(json.dumps(data))
+        store = ConfigStore(self.path, {"echo": EchoModule()})
+        store.load()
+        printer = store.snapshot()["printer"]
+        self.assertNotIn("min_print_spacing_seconds", printer)
+        self.assertEqual(printer["paper"], "58mm")
+
     def test_print_guard_config_is_validated(self):
         with self.assertRaises(ConfigError):
-            self.store.update_printer({"min_print_spacing_seconds": -1})
+            self.store.update_printer({"min_print_spacing_seconds": 0})
         with self.assertRaises(ConfigError):
             self.store.update_printer({"max_prints_per_hour": 0})
         with self.assertRaises(ConfigError):

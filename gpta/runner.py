@@ -366,7 +366,7 @@ class ModuleRunner:
                     now=now,
                 )
                 images.append(render_image(receipt, width_px))
-            # A scan is a person asking, like Run now: no minimum spacing.
+            # A scan is a person asking, like Run now.
             jobs = [
                 self.printer.submit(image, module_id, manual=True) for image in images
             ]

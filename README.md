@@ -238,9 +238,7 @@ shown on every tab, when:
   again clears the count and releases the queue. While it is disabled new
   prints are refused rather than queued.
 - **A limit applies:** at most `printer.max_prints_per_hour` (default 60)
-  jobs start per hour, and automatic prints start at least
-  `printer.min_print_spacing_seconds` apart (default 30). Jobs wait for a
-  slot; they are no longer skipped.
+  jobs start per hour. Jobs wait for a slot; they are no longer skipped.
 
 A module's newer scheduled receipt replaces its older one if that is still
 waiting, at most 50 jobs wait at once, and a job still waiting after

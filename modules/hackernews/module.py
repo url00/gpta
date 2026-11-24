@@ -23,8 +23,6 @@ from urllib.parse import urlsplit
 
 from gpta.module_api import (
     MAX_ITEMS_LIMIT,
-    Bar,
-    BarChart,
     Choice,
     Document,
     Element,
@@ -404,11 +402,9 @@ class HackerNewsModule(Module):
         comments = bool(ctx.options.get("comments", True))
         threads = self._comment_lengths(ctx, picked) if estimates and comments else {}
         choices: list[Choice] = []
-        bars: list[Bar] = []
-        for position, (story, reading) in enumerate(picked, start=1):
-            score = int(story.get("score", 0))
+        for story, reading in picked:
             note = [
-                f"{score} points",
+                f"{int(story.get('score', 0))} points",
                 f"{int(story.get('descendants', 0))} comments",
                 site(story),
             ]
@@ -424,11 +420,10 @@ class HackerNewsModule(Module):
                     " · ".join(note),
                 )
             )
-            bars.append(Bar(f"#{position}", score))
         what = "that article and its comments" if comments else "that article"
         blocks.append(Text(f"Scan a code to print {what}.", size="small"))
         blocks += ctx.selections.offer(choices, expires_hours=CODE_HOURS)
-        return blocks + [Rule(), BarChart(tuple(bars), title="Points")]
+        return blocks
 
     def _pick(
         self, ctx: ModuleContext, stories: list[dict]

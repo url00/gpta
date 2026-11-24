@@ -8,8 +8,7 @@ something holds the queue (see :meth:`Printer._plan`):
 - the printer is disabled, by the operator or after repeated failures,
 - the head job is longer than ``printer.warn_length_mm`` and has not been
   approved,
-- the hourly cap is reached, or an automatic print must wait out the
-  minimum spacing.
+- the hourly cap is reached.
 
 Jobs live in the database (:mod:`.jobs`), so the queue survives a restart.
 Device access itself lives in :mod:`.transport`.
@@ -65,18 +64,15 @@ class Printer:
         *,
         writer: PrinterWriter | None = None,
         clock=time.time,
-        monotonic=time.monotonic,
     ):
         self._config = config
         self.jobs = JobStore(db if db is not None else Database(None))
         self._writer = writer or PrinterWriter()
         self._clock = clock
-        self._monotonic = monotonic
         #: Called as ``on_result(job, error)`` when a job ends on the device;
         #: ``error`` is None for a completed print.
         self.on_result = None
         self._lock = threading.Lock()
-        self._last_print_mono: float | None = None
         self._last_print_at: str | None = None
         self._last_error: str | None = None
         self._last_job: dict[str, Any] | None = None
@@ -110,10 +106,9 @@ class Printer:
         ``source`` is a module id, ``"instant"``, ``"reader"`` or ``"test"``.
         ``auto`` marks a module's own print: it needs ``printer.auto_print``.
         ``manual`` marks a print the operator asked for (Run now, Instant,
-        Test print): it does not wait for the minimum spacing. A scheduled
-        run's job replaces the module's earlier job if that is still
-        waiting. ``approved`` says the operator has already confirmed the
-        length, so the job is not held at the warning limit.
+        Test print). A scheduled run's job replaces the module's earlier job
+        if that is still waiting. ``approved`` says the operator has already
+        confirmed the length, so the job is not held at the warning limit.
 
         Raises :class:`PrinterDisabled` (or its :class:`AutoPrintOff`), or
         :class:`PrinterRateLimited` when the queue is full.
@@ -346,17 +341,6 @@ class Printer:
                 f"hourly limit of {limit} prints reached",
                 min(wait, IDLE_WAIT_SECONDS),
             )
-        spacing = int(cfg["min_print_spacing_seconds"])
-        with self._lock:
-            last = self._last_print_mono
-        if job["kind"] == "auto" and spacing > 0 and last is not None:
-            remaining = spacing - (self._monotonic() - last)
-            if remaining > 0:
-                return (
-                    None,
-                    f"waiting {spacing}s between automatic prints",
-                    min(remaining, IDLE_WAIT_SECONDS),
-                )
         return job, None, 0
 
     def _print(self, job: dict[str, Any], cfg: dict[str, Any]) -> None:
@@ -367,7 +351,6 @@ class Printer:
         stop = threading.Event()
         with self._lock:
             self._current = (job_id, stop)
-            self._last_print_mono = self._monotonic()
         error: str | None = None
         state = jobs.DONE
         try:
